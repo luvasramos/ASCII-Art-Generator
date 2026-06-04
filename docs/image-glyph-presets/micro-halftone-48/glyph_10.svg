@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>checker plus center</title>
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="butt" stroke-linejoin="miter">
+    <rect x="24.6" y="24.6" width="2.8" height="2.8" fill="#FFFFFF" stroke="none" />
+    <rect x="36.6" y="24.6" width="2.8" height="2.8" fill="#FFFFFF" stroke="none" />
+    <rect x="30.6" y="30.6" width="2.8" height="2.8" fill="#FFFFFF" stroke="none" />
+    <rect x="24.6" y="36.6" width="2.8" height="2.8" fill="#FFFFFF" stroke="none" />
+    <rect x="36.6" y="36.6" width="2.8" height="2.8" fill="#FFFFFF" stroke="none" />
+    <circle cx="32" cy="32" r="1.2" fill="#FFFFFF" stroke="none" />
+  </g>
+</svg>

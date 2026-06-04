@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>square ring plus center</title>
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="butt" stroke-linejoin="miter">
+    <rect x="12" y="12" width="40" height="40" stroke-width="2" />
+    <rect x="21" y="21" width="22" height="22" stroke-width="1.5" />
+    <rect x="28" y="28" width="8" height="8" fill="#FFFFFF" stroke="none" />
+    <line x1="12" y1="32" x2="52" y2="32" stroke-width="1.15" />
+    <line x1="32" y1="12" x2="32" y2="52" stroke-width="1.15" />
+  </g>
+</svg>

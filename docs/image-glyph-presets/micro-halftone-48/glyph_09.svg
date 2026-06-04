@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>small x</title>
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="butt" stroke-linejoin="miter">
+    <line x1="26.5" y1="26.5" x2="37.5" y2="37.5" stroke-width="1.25" />
+    <line x1="37.5" y1="26.5" x2="26.5" y2="37.5" stroke-width="1.25" />
+  </g>
+</svg>

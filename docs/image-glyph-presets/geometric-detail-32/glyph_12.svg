@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>dense checker</title>
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="butt" stroke-linejoin="miter">
+    <rect x="14" y="14" width="36" height="36" stroke-width="1.2" />
+    <rect x="16" y="16" width="4" height="4" fill="#FFFFFF" stroke="none" />
+
+    <rect x="28" y="16" width="4" height="4" fill="#FFFFFF" stroke="none" />
+
+    <rect x="40" y="16" width="4" height="4" fill="#FFFFFF" stroke="none" />
+
+
+    <rect x="22" y="22" width="4" height="4" fill="#FFFFFF" stroke="none" />
+
+    <rect x="34" y="22" width="4" height="4" fill="#FFFFFF" stroke="none" />
+
+    <rect x="46" y="22" width="4" height="4" fill="#FFFFFF" stroke="none" />
+    <rect x="16" y="28" width="4" height="4" fill="#FFFFFF" stroke="none" />
+
+    <rect x="28" y="28" width="4" height="4" fill="#FFFFFF" stroke="none" />
+
+    <rect x="40" y="28" width="4" height="4" fill="#FFFFFF" stroke="none" />
+
+
+    <rect x="22" y="34" width="4" height="4" fill="#FFFFFF" stroke="none" />
+
+    <rect x="34" y="34" width="4" height="4" fill="#FFFFFF" stroke="none" />
+
+    <rect x="46" y="34" width="4" height="4" fill="#FFFFFF" stroke="none" />
+    <rect x="16" y="40" width="4" height="4" fill="#FFFFFF" stroke="none" />
+
+    <rect x="28" y="40" width="4" height="4" fill="#FFFFFF" stroke="none" />
+
+    <rect x="40" y="40" width="4" height="4" fill="#FFFFFF" stroke="none" />
+
+
+    <rect x="22" y="46" width="4" height="4" fill="#FFFFFF" stroke="none" />
+
+    <rect x="34" y="46" width="4" height="4" fill="#FFFFFF" stroke="none" />
+
+    <rect x="46" y="46" width="4" height="4" fill="#FFFFFF" stroke="none" />
+  </g>
+</svg>

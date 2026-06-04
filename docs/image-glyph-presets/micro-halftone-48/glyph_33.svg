@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>dense technical pattern</title>
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="butt" stroke-linejoin="miter">
+    <rect x="13" y="13" width="38" height="38" stroke-width="1" />
+    <line x1="19" y1="13" x2="19" y2="51" stroke-width="0.75" />
+    <line x1="26" y1="13" x2="26" y2="51" stroke-width="0.75" />
+    <line x1="33" y1="13" x2="33" y2="51" stroke-width="0.75" />
+    <line x1="40" y1="13" x2="40" y2="51" stroke-width="0.75" />
+    <line x1="47" y1="13" x2="47" y2="51" stroke-width="0.75" />
+    <line x1="13" y1="19" x2="51" y2="19" stroke-width="0.75" />
+    <line x1="13" y1="26" x2="51" y2="26" stroke-width="0.75" />
+    <line x1="13" y1="33" x2="51" y2="33" stroke-width="0.75" />
+    <line x1="13" y1="40" x2="51" y2="40" stroke-width="0.75" />
+    <line x1="13" y1="47" x2="51" y2="47" stroke-width="0.75" />
+    <circle cx="18.5" cy="18.5" r="0.95" fill="#FFFFFF" stroke="none" />
+    <circle cx="27.5" cy="18.5" r="0.95" fill="#FFFFFF" stroke="none" />
+    <circle cx="36.5" cy="18.5" r="0.95" fill="#FFFFFF" stroke="none" />
+    <circle cx="45.5" cy="18.5" r="0.95" fill="#FFFFFF" stroke="none" />
+    <circle cx="18.5" cy="27.5" r="0.95" fill="#FFFFFF" stroke="none" />
+    <circle cx="27.5" cy="27.5" r="0.95" fill="#FFFFFF" stroke="none" />
+    <circle cx="36.5" cy="27.5" r="0.95" fill="#FFFFFF" stroke="none" />
+    <circle cx="45.5" cy="27.5" r="0.95" fill="#FFFFFF" stroke="none" />
+    <circle cx="18.5" cy="36.5" r="0.95" fill="#FFFFFF" stroke="none" />
+    <circle cx="27.5" cy="36.5" r="0.95" fill="#FFFFFF" stroke="none" />
+    <circle cx="36.5" cy="36.5" r="0.95" fill="#FFFFFF" stroke="none" />
+    <circle cx="45.5" cy="36.5" r="0.95" fill="#FFFFFF" stroke="none" />
+    <circle cx="18.5" cy="45.5" r="0.95" fill="#FFFFFF" stroke="none" />
+    <circle cx="27.5" cy="45.5" r="0.95" fill="#FFFFFF" stroke="none" />
+    <circle cx="36.5" cy="45.5" r="0.95" fill="#FFFFFF" stroke="none" />
+    <circle cx="45.5" cy="45.5" r="0.95" fill="#FFFFFF" stroke="none" />
+  </g>
+</svg>

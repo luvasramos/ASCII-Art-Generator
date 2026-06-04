@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>small checker</title>
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="butt" stroke-linejoin="miter">
+    <rect x="24.7" y="24.7" width="2.6" height="2.6" fill="#FFFFFF" stroke="none" />
+    <rect x="36.7" y="24.7" width="2.6" height="2.6" fill="#FFFFFF" stroke="none" />
+    <rect x="30.7" y="30.7" width="2.6" height="2.6" fill="#FFFFFF" stroke="none" />
+    <rect x="24.7" y="36.7" width="2.6" height="2.6" fill="#FFFFFF" stroke="none" />
+    <rect x="36.7" y="36.7" width="2.6" height="2.6" fill="#FFFFFF" stroke="none" />
+  </g>
+</svg>

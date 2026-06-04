@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" shape-rendering="geometricPrecision">
+  <title>filled diamond</title>
+  <g><polygon points="32,14 50,32 32,50 14,32" fill="#FFFFFF" /></g>
+</svg>
