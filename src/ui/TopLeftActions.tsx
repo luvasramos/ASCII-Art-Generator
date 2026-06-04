@@ -1,10 +1,16 @@
-import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Copy, Download, Upload } from "lucide-react";
-import { estimateAnimatedExportSize, formatBytes, resolveAnimatedExportFps } from "../export/exportQuality";
+import { AlertTriangle, Copy, Download, Upload } from "lucide-react";
+import {
+  animatedExportQualityOptions,
+  estimateAnimatedExportSize,
+  formatBitrate,
+  formatBytes,
+  resolveAnimatedExportFps,
+  resolveAnimatedExportProfile
+} from "../export/exportQuality";
 import { defaultExportOptions, defaultExportScale } from "../state/defaults";
 import { useStudioStore } from "../state/useStudioStore";
-import type { AnimationType, RenderGrid } from "../renderer/types";
+import type { AnimatedExportQuality, AnimationType, RenderGrid } from "../renderer/types";
 import { CommandButton, Select, Slider, Toggle } from "./controls";
 
 interface TopLeftActionsProps {
@@ -44,24 +50,6 @@ const exportFileTypeOptions: Array<{ value: ExportFileType; label: string }> = [
   { value: "gif", label: "GIF" }
 ];
 
-const qualityToValue = {
-  small: 0,
-  balanced: 50,
-  high: 100
-} as const;
-
-const qualityLabels = {
-  small: "Small",
-  balanced: "Balanced",
-  high: "High Quality"
-} as const;
-
-const qualityFromValue = (value: number): "small" | "balanced" | "high" => {
-  if (value < 25) return "small";
-  if (value < 75) return "balanced";
-  return "high";
-};
-
 export const TopLeftActions = ({
   grid,
   imageName,
@@ -89,7 +77,6 @@ export const TopLeftActions = ({
   const mediaInputRef = useRef<HTMLInputElement | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [fileType, setFileType] = useState<ExportFileType>("png");
-  const [animatedInfoOpen, setAnimatedInfoOpen] = useState(false);
   const { font, exportOptions, exportScale, updateFont, updateExportOptions, updateExportScale } = useStudioStore();
   const exportDisabled = !grid || isExportingVideo;
   const animatedDuration = isVideoLoaded ? videoDuration : showAnimationExports ? animationDuration : 0;
@@ -98,9 +85,11 @@ export const TopLeftActions = ({
     duration: animatedDuration,
     fps: animationFps,
     quality: exportOptions.animatedExportQuality,
-    animationType
+    animationType,
+    exportScale
   });
   const effectiveAnimatedFps = resolveAnimatedExportFps(animationFps, exportOptions.animatedExportQuality, animationType);
+  const selectedQualityProfile = resolveAnimatedExportProfile(exportOptions.animatedExportQuality, animationType);
   const animatedExportAvailable = isVideoLoaded || showAnimationExports;
   const selectedAnimatedVideoExport = fileType === "webm" || fileType === "mp4";
   const selectedGifExport = fileType === "gif";
@@ -112,9 +101,23 @@ export const TopLeftActions = ({
     ((selectedAnimatedVideoExport || selectedGifExport) && isProcessing) ||
     (selectedAnimatedVideoExport && !animatedExportAvailable) ||
     (selectedGifExport && !showAnimationExports);
-  const selectedQualityValue = qualityToValue[exportOptions.animatedExportQuality] ?? qualityToValue.balanced;
-  const selectedQualityLabel = qualityLabels[exportOptions.animatedExportQuality] ?? qualityLabels.balanced;
-  const visibleStatus = /^(exporting|exported|copied|loading|writing|reading|rendering|converting|downloading|ffmpeg|mp4|webm|gif|png|svg|export failed|video export canceled|animation export canceled|gif export canceled)/i.test(
+  const outputScale = fileType === "svg" ? 1 : exportScale;
+  const outputWidth = grid ? Math.max(1, Math.round(grid.width * outputScale)) : null;
+  const outputHeight = grid ? Math.max(1, Math.round(grid.height * outputScale)) : null;
+  const selectedEstimate =
+    animatedEstimate && fileType === "mp4"
+      ? animatedEstimate.mp4Bytes
+      : animatedEstimate && fileType === "webm"
+        ? animatedEstimate.webmBytes
+        : animatedEstimate && fileType === "gif"
+          ? animatedEstimate.gifBytes
+          : null;
+  const mp4HighResolutionWarning =
+    fileType === "mp4" &&
+    showAnimatedControls &&
+    ((outputWidth !== null && outputHeight !== null && (outputWidth > 1920 || outputHeight > 1080)) ||
+      exportOptions.animatedExportQuality === "master");
+  const visibleStatus = /^(preparing|exporting|exported|copied|loading|writing|reading|rendering|recording|converting|finalizing|download ready|downloading|ffmpeg|mp4|webm|gif|png|svg|export failed|video export canceled|animation export canceled|gif export canceled)/i.test(
     status
   )
     ? status
@@ -292,70 +295,99 @@ export const TopLeftActions = ({
             </div>
           )}
 
+          {!showAnimatedControls && (
+            <div className="rounded-2xl border border-white/[0.06] bg-black/20 px-3 py-2 text-[11px] leading-5 text-zinc-500">
+              <div className="flex items-center justify-between gap-3">
+                <span>File type</span>
+                <span className="tabular-nums text-zinc-300">{fileType.toUpperCase()}</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span>Output size</span>
+                <span className="tabular-nums text-zinc-300">
+                  {outputWidth && outputHeight ? `${outputWidth} x ${outputHeight} px` : "No render"}
+                </span>
+              </div>
+              {fileType === "png" && (
+                <div className="flex items-center justify-between gap-3">
+                  <span>Export scale</span>
+                  <span className="tabular-nums text-zinc-300">{exportScale}x</span>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="space-y-3 rounded-2xl border border-white/[0.06] bg-black/20 px-3 py-2.5">
             <Toggle label="Font smoothing" checked={font.smoothing} onChange={(smoothing) => updateFont({ smoothing })} />
             <Toggle label="Anti alias" checked={font.antiAlias} onChange={(antiAlias) => updateFont({ antiAlias })} />
           </div>
 
           {showAnimatedControls && (
-            <div className="space-y-2">
-              <Slider
-                label="Animated quality"
-                value={selectedQualityValue}
-                min={0}
-                max={100}
-                step={50}
-                resetValue={qualityToValue.balanced}
-                onChange={(value) => updateExportOptions({ animatedExportQuality: qualityFromValue(value) })}
+            <div className="space-y-3">
+              <Select
+                label="Video Quality"
+                value={exportOptions.animatedExportQuality}
+                options={animatedExportQualityOptions}
+                onChange={(value) => updateExportOptions({ animatedExportQuality: value as AnimatedExportQuality })}
               />
-              <div className="-mt-2 text-right text-xs font-medium text-zinc-400">{selectedQualityLabel}</div>
-              <div className="overflow-hidden rounded-2xl border border-white/[0.06] bg-black/20">
-                <button
-                  type="button"
-                  className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-xs font-semibold text-zinc-300 transition hover:bg-white/[0.035]"
-                  onClick={() => setAnimatedInfoOpen((value) => !value)}
-                >
-                  <span>Animated export info</span>
-                  <motion.span animate={{ rotate: animatedInfoOpen ? 180 : 0 }} transition={{ duration: 0.16 }}>
-                    <ChevronDown size={14} />
-                  </motion.span>
-                </button>
-                <AnimatePresence initial={false}>
-                  {animatedInfoOpen && (
-                    <motion.div
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      transition={{ duration: 0.14 }}
-                      className="border-t border-white/[0.05] px-3 py-2 text-[11px] leading-5 text-zinc-500"
-                    >
-                      <div className="flex items-center justify-between gap-3">
-                        <span>Animated FPS</span>
-                        <span className="tabular-nums text-zinc-400">{effectiveAnimatedFps} fps</span>
-                      </div>
-                      {animatedEstimate && (
-                        <>
-                          <div className="flex items-center justify-between gap-3">
-                            <span>Estimated WebM</span>
-                            <span className="tabular-nums text-zinc-400">
-                              {formatBytes(animatedEstimate.webmBytes)}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between gap-3">
-                            <span>Estimated MP4</span>
-                            <span className="tabular-nums text-zinc-400">{formatBytes(animatedEstimate.mp4Bytes)}</span>
-                          </div>
-                          <div className="flex items-center justify-between gap-3">
-                            <span>Estimated GIF</span>
-                            <span className="tabular-nums text-zinc-400">{formatBytes(animatedEstimate.gifBytes)}</span>
-                          </div>
-                        </>
-                      )}
-                      <div className="pt-1 text-zinc-500">WebM is recommended for smaller animation files.</div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
+              <div className="rounded-2xl border border-white/[0.06] bg-black/20 px-3 py-2 text-[11px] leading-5 text-zinc-500">
+                <div className="flex items-center justify-between gap-3">
+                  <span>File type</span>
+                  <span className="tabular-nums text-zinc-300">{fileType.toUpperCase()}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span>Output size</span>
+                  <span className="tabular-nums text-zinc-300">
+                    {outputWidth && outputHeight ? `${outputWidth} x ${outputHeight} px` : "No render"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span>FPS</span>
+                  <span className="tabular-nums text-zinc-300">{effectiveAnimatedFps} fps</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span>Duration</span>
+                  <span className="tabular-nums text-zinc-300">
+                    {Number.isFinite(animatedDuration) && animatedDuration > 0 ? `${animatedDuration.toFixed(2)}s` : "0s"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span>Frames</span>
+                  <span className="tabular-nums text-zinc-300">{animatedEstimate?.frames ?? 0}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span>Quality</span>
+                  <span className="tabular-nums text-zinc-300">{selectedQualityProfile.label}</span>
+                </div>
+                {selectedAnimatedVideoExport && animatedEstimate && (
+                  <div className="flex items-center justify-between gap-3">
+                    <span>Bitrate target</span>
+                    <span className="tabular-nums text-zinc-300">{formatBitrate(animatedEstimate.bitrate)}</span>
+                  </div>
+                )}
+                {fileType === "mp4" && animatedEstimate && (
+                  <div className="flex items-center justify-between gap-3">
+                    <span>H.264</span>
+                    <span className="tabular-nums text-zinc-300">
+                      CRF {animatedEstimate.crf}, {animatedEstimate.preset}
+                    </span>
+                  </div>
+                )}
+                {selectedEstimate !== null && (
+                  <div className="mt-1 flex items-center justify-between gap-3 border-t border-white/[0.05] pt-1">
+                    <span>Estimated {fileType.toUpperCase()}</span>
+                    <span className="tabular-nums text-zinc-300">{formatBytes(selectedEstimate)}</span>
+                  </div>
+                )}
               </div>
+              {mp4HighResolutionWarning && (
+                <div className="flex gap-2 rounded-2xl border border-amber-300/15 bg-amber-300/[0.06] px-3 py-2 text-[11px] leading-5 text-amber-100/80">
+                  <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                  <span>
+                    High-quality MP4 export can be slow in the browser. Keep the tab open and avoid switching apps.
+                    WebM is faster.
+                  </span>
+                </div>
+              )}
             </div>
           )}
 

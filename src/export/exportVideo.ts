@@ -12,8 +12,8 @@ import type {
   ImageSettings
 } from "../renderer/types";
 import { downloadBlob } from "./download";
-import { resolveAnimatedExportFps, resolveAnimatedExportProfile } from "./exportQuality";
-import { convertWebMToMp4 } from "./ffmpegMp4";
+import { formatBitrate, resolveAnimatedExportFps, resolveVideoEncodingSettings } from "./exportQuality";
+import { collectMp4RuntimeDiagnostics, convertWebMToMp4 } from "./ffmpegMp4";
 import { renderAsciiAnimationFrames } from "./renderAnimationFrames";
 
 export type VideoExportExtension = "mp4" | "webm";
@@ -70,12 +70,15 @@ interface ExportAsciiVideoResult {
 }
 
 const videoFormats: VideoExportFormat[] = [
-  { mimeType: 'video/mp4;codecs="avc1.42E01E,mp4a.40.2"', extension: "mp4", label: "MP4" },
+  { mimeType: "video/mp4;codecs=avc1.42E01E", extension: "mp4", label: "MP4 H.264" },
+  { mimeType: "video/mp4;codecs=h264", extension: "mp4", label: "MP4 H.264" },
   { mimeType: "video/mp4", extension: "mp4", label: "MP4" },
   { mimeType: "video/webm;codecs=vp9", extension: "webm", label: "WebM VP9" },
   { mimeType: "video/webm;codecs=vp8", extension: "webm", label: "WebM VP8" },
   { mimeType: "video/webm", extension: "webm", label: "WebM" }
 ];
+
+const videoMimeTypesToTest = videoFormats.map((format) => format.mimeType);
 
 const createAbortError = () => {
   const error = new Error("Video export canceled.");
@@ -173,6 +176,14 @@ const buildVideoFileName = (sourceName: string, suffix: string, extension: Video
 const logMp4Export = (message: string, details?: Record<string, unknown>) => {
   console.info(`[ASCII Studio MP4] ${message}`, details ?? "");
 };
+
+const collectRecorderDiagnostics = () => ({
+  mediaRecorderAvailable: typeof MediaRecorder !== "undefined",
+  testedMimeTypes: videoMimeTypesToTest.map((mimeType) => ({
+    mimeType,
+    supported: typeof MediaRecorder !== "undefined" ? MediaRecorder.isTypeSupported(mimeType) : false
+  }))
+});
 
 const cloneCanvasFrame = async (canvas: HTMLCanvasElement): Promise<CanvasImageSource> => {
   if (typeof createImageBitmap === "function") {
@@ -286,23 +297,6 @@ const captureCompletedFrame = async ({
   await yieldToBrowser();
 };
 
-const videoBitsPerPixelFloor: Record<AnimatedExportQuality, number> = {
-  small: 0.12,
-  balanced: 0.32,
-  high: 0.72
-};
-
-const resolveAsciiVideoBitrate = (
-  width: number,
-  height: number,
-  fps: number,
-  profile: ReturnType<typeof resolveAnimatedExportProfile>
-) => {
-  const bitsPerPixel = Math.max(profile.videoBitsPerPixel, videoBitsPerPixelFloor[profile.quality]);
-  const target = Math.round(width * height * fps * bitsPerPixel);
-  return Math.max(2_500_000, Math.min(120_000_000, target));
-};
-
 export const exportAsciiFrameSequence = async ({
   sourceName,
   fileSuffix,
@@ -337,34 +331,52 @@ export const exportAsciiFrameSequence = async ({
 
   const exportQuality = quality ?? exportOptions.animatedExportQuality;
   const convertingToMp4 = preferredExtension === "mp4";
-  if (convertingToMp4 && typeof window !== "undefined" && window.location.protocol === "file:") {
-    throw new Error("MP4 export requires running the app from a local server.");
+  const webmRecordingFormat = convertingToMp4 ? getSupportedVideoFormat("webm", false) : null;
+  const nativeMp4Format = convertingToMp4 ? getSupportedVideoFormat("mp4", false) : null;
+  const useNativeMp4Recorder = convertingToMp4 && !webmRecordingFormat && Boolean(nativeMp4Format);
+  if (convertingToMp4) {
+    logMp4Export("Runtime diagnostics before MP4 export", {
+      ...collectMp4RuntimeDiagnostics(),
+      recorder: collectRecorderDiagnostics(),
+      webmRecordingFormat,
+      nativeMp4Recorder: nativeMp4Format,
+      nativeMp4AsLastResort: useNativeMp4Recorder
+    });
   }
-  const recordingExtension: VideoExportExtension = convertingToMp4 ? "webm" : preferredExtension;
-  const format = getSupportedVideoFormat(recordingExtension, convertingToMp4 ? false : allowFormatFallback);
+  if (convertingToMp4 && !useNativeMp4Recorder && typeof window !== "undefined" && window.location.protocol === "file:") {
+    throw new Error("MP4 export requires running the app from a local server, not file://.");
+  }
+  const recordingExtension: VideoExportExtension = useNativeMp4Recorder ? "mp4" : convertingToMp4 ? "webm" : preferredExtension;
+  const format = useNativeMp4Recorder
+    ? nativeMp4Format
+    : convertingToMp4
+      ? webmRecordingFormat
+      : getSupportedVideoFormat(recordingExtension, allowFormatFallback);
   if (!format) {
     throw new Error(
       preferredExtension === "mp4"
-        ? "MP4 export needs WebM canvas recording before conversion, but this browser cannot record WebM."
-        : "This browser does not provide a supported video recorder. Use GIF export for deterministic still-image animation."
+        ? "MediaRecorder unavailable or no supported WebM/MP4 canvas recording MIME type was reported. MP4 conversion could not start in this browser or hosting environment. You can export WebM now, or try localhost / Netlify / Cloudflare Pages for better MP4 support."
+        : "MediaRecorder unavailable or no supported WebM canvas recording MIME type was reported. Use GIF export for deterministic still-image animation."
     );
   }
 
   const normalizedFps = resolveAnimatedExportFps(fps, exportQuality, animation?.type);
-  const profile = resolveAnimatedExportProfile(exportQuality, animation?.type);
   const totalFrames = Math.max(1, Math.round(Math.max(0.001, duration) * normalizedFps));
   const frameInterval = 1000 / normalizedFps;
-  const recordingProgressWeight = convertingToMp4 ? 0.72 : 1;
+  const recordingProgressWeight = convertingToMp4 && !useNativeMp4Recorder ? 0.72 : 1;
   const emitRecordingProgress = (progress: number) => onProgress?.(Math.min(recordingProgressWeight, Math.max(0, progress * recordingProgressWeight)));
   const bufferedFrames: CanvasImageSource[] = [];
   let firstCanvas: HTMLCanvasElement | null = null;
   let capturedFrameCount = 0;
 
   try {
+    onStatus?.("Preparing export");
     if (prerenderFrames) {
-      onStatus?.(convertingToMp4 ? "Rendering WebM" : `Pre-rendering ${totalFrames} ${frameLabel} frames at ${normalizedFps}fps`);
+      onStatus?.("Rendering frames");
+    } else if (convertingToMp4 && !useNativeMp4Recorder) {
+      onStatus?.("Recording WebM");
     } else if (convertingToMp4) {
-      onStatus?.("Rendering WebM");
+      onStatus?.("Recording MP4");
     }
     if (convertingToMp4) {
       logMp4Export("Starting MP4 export from current ASCII render", {
@@ -373,7 +385,9 @@ export const exportAsciiFrameSequence = async ({
         expectedFrameCount: totalFrames,
         fps: normalizedFps,
         duration,
-        animationType: animation?.type ?? "none"
+        animationType: animation?.type ?? "none",
+        nativeMp4Recorder: useNativeMp4Recorder,
+        recordingMimeType: format.mimeType
       });
     }
 
@@ -417,7 +431,7 @@ export const exportAsciiFrameSequence = async ({
         width: recordingCanvas.width,
         height: recordingCanvas.height,
         bufferedFrameCount: bufferedFrames.length,
-        usesSameFrameSequenceAsWebM: true
+        usesSameFrameSequenceAsWebM: !useNativeMp4Recorder
       });
     }
     const recordingCtx = recordingCanvas.getContext("2d");
@@ -425,6 +439,28 @@ export const exportAsciiFrameSequence = async ({
       throw new Error("Canvas2D is unavailable for video recording.");
     }
     recordingCtx.imageSmoothingEnabled = false;
+    const encodingSettings = resolveVideoEncodingSettings({
+      width: recordingCanvas.width,
+      height: recordingCanvas.height,
+      fps: normalizedFps,
+      quality: exportQuality,
+      animationType: animation?.type
+    });
+    console.info("[ASCII Studio Video] Export encoding settings", {
+      selectedFps: normalizedFps,
+      outputWidth: recordingCanvas.width,
+      outputHeight: recordingCanvas.height,
+      duration,
+      frameCount: totalFrames,
+      quality: encodingSettings.profile.label,
+      bitrateTarget: encodingSettings.bitrate,
+      bitrateTargetLabel: formatBitrate(encodingSettings.bitrate),
+      mp4Crf: encodingSettings.crf,
+      mp4Preset: encodingSettings.preset,
+      recordingMimeType: format.mimeType,
+      preferredExtension,
+      recordingExtension
+    });
 
     if (bufferedFrames.length) {
       drawRecordingFrame(recordingCtx, recordingCanvas, bufferedFrames[0]);
@@ -458,7 +494,8 @@ export const exportAsciiFrameSequence = async ({
       });
 
     try {
-      const bitsPerSecond = resolveAsciiVideoBitrate(recordingCanvas.width, recordingCanvas.height, normalizedFps, profile);
+      const bitsPerSecond = encodingSettings.bitrate;
+      onStatus?.(convertingToMp4 && !useNativeMp4Recorder ? "Recording WebM" : `Recording ${format.label}`);
       recorder = new MediaRecorder(stream, { mimeType: format.mimeType, videoBitsPerSecond: bitsPerSecond });
       recorder.addEventListener("dataavailable", (event) => {
         if (event.data.size > 0) {
@@ -555,7 +592,7 @@ export const exportAsciiFrameSequence = async ({
       canvasWidth: recordingCanvas.width,
       canvasHeight: recordingCanvas.height
     });
-    if (convertingToMp4) {
+    if (convertingToMp4 && !useNativeMp4Recorder) {
       logMp4Export("Captured WebM intermediate", {
         capturedFrameCount,
         expectedFrameCount: totalFrames,
@@ -571,17 +608,55 @@ export const exportAsciiFrameSequence = async ({
         );
       }
     }
+    if (convertingToMp4 && useNativeMp4Recorder) {
+      if (blob.size <= 0 || !blob.type.toLowerCase().startsWith("video/mp4")) {
+        throw new Error("Native MP4 recording produced invalid MP4 data.");
+      }
+      const fileName = buildVideoFileName(sourceName, fileSuffix, "mp4");
+      logMp4Export("Downloading native MP4", {
+        downloadedFileName: fileName,
+        mp4BlobSize: blob.size,
+        mp4MimeType: blob.type,
+        capturedFrameCount,
+        selectedFps: normalizedFps,
+        outputWidth: recordingCanvas.width,
+        outputHeight: recordingCanvas.height,
+        duration,
+        frameCount: totalFrames,
+        bitrateTarget: encodingSettings.bitrate
+      });
+      onStatus?.("Finalizing file");
+      downloadBlob(blob, fileName);
+      onStatus?.("Download ready");
+      onProgress?.(1);
+      return {
+        fileName,
+        mimeType: blob.type,
+        extension: "mp4",
+        usedFallback: false,
+        timingWarning
+      };
+    }
     if (convertingToMp4 && (blob.size <= 0 || !blob.type.toLowerCase().startsWith("video/webm"))) {
       throw new Error("MP4 conversion failed. The intermediate WebM was invalid. You can export WebM instead.");
     }
     if (convertingToMp4) {
       const mp4Blob = await convertWebMToMp4({
         webmBlob: blob,
+        fps: normalizedFps,
+        width: recordingCanvas.width,
+        height: recordingCanvas.height,
+        duration,
+        frameCount: totalFrames,
+        quality: exportQuality,
+        bitrateTarget: encodingSettings.bitrate,
+        crf: encodingSettings.crf,
+        preset: encodingSettings.preset,
         signal,
         onStatus,
         onProgress: (progress) => onProgress?.(0.72 + progress * 0.27)
       });
-      onStatus?.("Downloading MP4");
+      onStatus?.("Finalizing file");
       const fileName = buildVideoFileName(sourceName, fileSuffix, "mp4");
       if (!fileName.toLowerCase().endsWith(".mp4") || mp4Blob.size <= 0 || mp4Blob.type !== "video/mp4") {
         throw new Error("MP4 conversion failed. The final MP4 output was invalid. You can export WebM instead.");
@@ -590,9 +665,17 @@ export const exportAsciiFrameSequence = async ({
         downloadedFileName: fileName,
         mp4BlobSize: mp4Blob.size,
         mp4MimeType: mp4Blob.type,
-        capturedFrameCount
+        capturedFrameCount,
+        selectedFps: normalizedFps,
+        outputWidth: recordingCanvas.width,
+        outputHeight: recordingCanvas.height,
+        duration,
+        frameCount: totalFrames,
+        bitrateTarget: encodingSettings.bitrate,
+        crf: encodingSettings.crf
       });
       downloadBlob(mp4Blob, fileName);
+      onStatus?.("Download ready");
       onProgress?.(1);
       return {
         fileName,
@@ -604,7 +687,21 @@ export const exportAsciiFrameSequence = async ({
     }
 
     const fileName = buildVideoFileName(sourceName, fileSuffix, format.extension);
+    onStatus?.("Finalizing file");
+    console.info("[ASCII Studio WebM] Downloading video export", {
+      downloadedFileName: fileName,
+      selectedFps: normalizedFps,
+      outputWidth: recordingCanvas.width,
+      outputHeight: recordingCanvas.height,
+      duration,
+      frameCount: totalFrames,
+      bitrateTarget: encodingSettings.bitrate,
+      finalBlobSize: blob.size,
+      mimeType: blob.type
+    });
     downloadBlob(blob, fileName);
+    onStatus?.("Download ready");
+    onProgress?.(1);
     return {
       fileName,
       mimeType: format.mimeType,

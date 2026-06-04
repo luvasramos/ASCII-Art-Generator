@@ -375,15 +375,25 @@ const normalizeAnimation = (
   };
 };
 
+const normalizeAnimatedExportQuality = (quality?: string): ExportOptions["animatedExportQuality"] => {
+  if (quality === "preview" || quality === "standard" || quality === "high" || quality === "master") {
+    return quality;
+  }
+  if (quality === "small") {
+    return "preview";
+  }
+  if (quality === "balanced") {
+    return "standard";
+  }
+  return defaultExportOptions.animatedExportQuality;
+};
+
 const normalizeExportOptions = (options?: Partial<ExportOptions>): ExportOptions => ({
   transparentBackground: options?.transparentBackground ?? defaultExportOptions.transparentBackground,
   backgroundColor: options?.backgroundColor ?? defaultExportOptions.backgroundColor,
   alphaThreshold: clamp(options?.alphaThreshold ?? defaultExportOptions.alphaThreshold, 0, 100),
   videoFps: Math.round(clamp(asNumber(options?.videoFps, defaultExportOptions.videoFps), 1, 60)),
-  animatedExportQuality:
-    options?.animatedExportQuality === "small" || options?.animatedExportQuality === "high"
-      ? options.animatedExportQuality
-      : defaultExportOptions.animatedExportQuality
+  animatedExportQuality: normalizeAnimatedExportQuality(options?.animatedExportQuality)
 });
 
 const normalizeExportScale = (exportScale?: number) => clamp(exportScale ?? defaultExportScale, 1, 4);

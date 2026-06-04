@@ -1,8 +1,18 @@
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile } from "@ffmpeg/util";
+import type { AnimatedExportQuality } from "../renderer/types";
 
 interface ConvertWebMToMp4Args {
   webmBlob: Blob;
+  fps: number;
+  width: number;
+  height: number;
+  duration: number;
+  frameCount: number;
+  quality: AnimatedExportQuality;
+  bitrateTarget: number;
+  crf: number;
+  preset: "veryfast" | "medium" | "slow";
   signal?: AbortSignal;
   onStatus?: (message: string) => void;
   onProgress?: (progress: number) => void;
@@ -14,6 +24,21 @@ let exportSequence = 0;
 const ffmpegLoadTimeoutMs = 45_000;
 const ffmpegExecTimeoutMs = 180_000;
 const ffmpegReadTimeoutMs = 45_000;
+const mp4EnvironmentFallback =
+  "MP4 conversion could not start in this browser or hosting environment. You can export WebM now, or try localhost / Netlify / Cloudflare Pages for better MP4 support.";
+const ffmpegAssetPaths = {
+  coreURL: "ffmpeg/ffmpeg-core.js",
+  wasmURL: "ffmpeg/ffmpeg-core.wasm",
+  classWorkerURL: "ffmpeg/ffmpeg-worker.js"
+};
+const mediaRecorderMimeTypes = [
+  "video/mp4",
+  "video/mp4;codecs=h264",
+  "video/mp4;codecs=avc1.42E01E",
+  "video/webm;codecs=vp9",
+  "video/webm;codecs=vp8",
+  "video/webm"
+];
 
 const createAbortError = () => {
   const error = new DOMException("MP4 export canceled.", "AbortError");
@@ -24,15 +49,42 @@ const resolveBundledAssetUrl = (assetUrl: string) => {
   if (typeof window === "undefined") {
     return assetUrl;
   }
-  return new URL(assetUrl, window.location.href).href;
+  return new URL(assetUrl, document.baseURI || window.location.href).href;
+};
+
+const resolveFfmpegAssetUrls = () => ({
+  coreURL: resolveBundledAssetUrl(ffmpegAssetPaths.coreURL),
+  wasmURL: resolveBundledAssetUrl(ffmpegAssetPaths.wasmURL),
+  classWorkerURL: resolveBundledAssetUrl(ffmpegAssetPaths.classWorkerURL)
+});
+
+export const collectMp4RuntimeDiagnostics = () => {
+  const assetUrls = resolveFfmpegAssetUrls();
+  return {
+    href: typeof window === "undefined" ? "(no window)" : window.location.href,
+    protocol: typeof window === "undefined" ? "(no window)" : window.location.protocol,
+    assetUrls,
+    workerAvailable: typeof Worker !== "undefined",
+    webAssemblyAvailable: typeof WebAssembly !== "undefined",
+    mediaRecorderAvailable: typeof MediaRecorder !== "undefined",
+    mediaRecorderMimeTypes: mediaRecorderMimeTypes.map((mimeType) => ({
+      mimeType,
+      supported: typeof MediaRecorder !== "undefined" ? MediaRecorder.isTypeSupported(mimeType) : false
+    })),
+    crossOriginIsolated:
+      typeof window !== "undefined" && "crossOriginIsolated" in window ? window.crossOriginIsolated : false
+  };
 };
 
 const assertMp4CanRunHere = () => {
   if (typeof window !== "undefined" && window.location.protocol === "file:") {
-    throw new Error("MP4 export requires running the app from a local server.");
+    throw new Error("MP4 export requires running the app from a local server, not file://.");
   }
-  if (typeof Worker === "undefined" || typeof WebAssembly === "undefined") {
-    throw new Error("MP4 export requires Web Worker and WebAssembly support.");
+  if (typeof Worker === "undefined") {
+    throw new Error(`Worker unavailable. ${mp4EnvironmentFallback}`);
+  }
+  if (typeof WebAssembly === "undefined") {
+    throw new Error(`WebAssembly unavailable. ${mp4EnvironmentFallback}`);
   }
 };
 
@@ -55,14 +107,14 @@ const withTimeout = async <T,>(promise: Promise<T>, milliseconds: number, label:
 
 const validateWebMBlob = async (webmBlob: Blob) => {
   if (!webmBlob || webmBlob.size <= 0) {
-    throw new Error("MP4 conversion failed. The intermediate WebM was empty.");
+    throw new Error("MP4 conversion failed. The intermediate WebM was empty. Export WebM instead.");
   }
   if (webmBlob.type && !webmBlob.type.toLowerCase().startsWith("video/webm")) {
-    throw new Error(`MP4 conversion failed. Expected WebM input, received ${webmBlob.type}.`);
+    throw new Error(`MP4 conversion failed. Expected WebM input, received ${webmBlob.type}. Export WebM instead.`);
   }
   const signature = new Uint8Array(await webmBlob.slice(0, 4).arrayBuffer());
   if (signature.length < 4 || signature[0] !== 0x1a || signature[1] !== 0x45 || signature[2] !== 0xdf || signature[3] !== 0xa3) {
-    throw new Error("MP4 conversion failed. The intermediate WebM did not contain a valid EBML header.");
+    throw new Error("MP4 conversion failed. The intermediate WebM did not contain a valid EBML header. Export WebM instead.");
   }
 };
 
@@ -95,6 +147,32 @@ const logMp4 = (message: string, details?: Record<string, unknown>) => {
   console.info(`[ASCII Studio MP4] ${message}`, details ?? "");
 };
 
+const verifyFfmpegAsset = async (label: string, url: string, signal?: AbortSignal) => {
+  try {
+    const response = await fetch(url, {
+      method: "HEAD",
+      cache: "no-store",
+      signal
+    });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+    return;
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`${label} failed to load from ${url}. ${detail}. ${mp4EnvironmentFallback}`);
+  }
+};
+
+const verifyFfmpegAssets = async (
+  assetUrls: ReturnType<typeof resolveFfmpegAssetUrls>,
+  signal?: AbortSignal
+) => {
+  await verifyFfmpegAsset("ffmpeg-core.js", assetUrls.coreURL, signal);
+  await verifyFfmpegAsset("ffmpeg-core.wasm", assetUrls.wasmURL, signal);
+  await verifyFfmpegAsset("ffmpeg-worker.js", assetUrls.classWorkerURL, signal);
+};
+
 const clearPreviousFfmpegVideoFiles = async (ffmpeg: FFmpeg) => {
   try {
     const nodes = await ffmpeg.listDir("/");
@@ -122,7 +200,11 @@ const getFfmpeg = async (signal?: AbortSignal, onStatus?: (message: string) => v
   }
 
   if (!sharedLoadPromise) {
-    onStatus?.("Loading converter");
+    onStatus?.("Loading MP4 encoder");
+    const assetUrls = resolveFfmpegAssetUrls();
+    logMp4("Runtime diagnostics", collectMp4RuntimeDiagnostics());
+    logMp4("Resolved FFmpeg asset URLs", assetUrls);
+    await verifyFfmpegAssets(assetUrls, signal);
     const ffmpeg = new FFmpeg();
     sharedFfmpeg = ffmpeg;
     const resetEncoder = () => {
@@ -130,23 +212,39 @@ const getFfmpeg = async (signal?: AbortSignal, onStatus?: (message: string) => v
       sharedFfmpeg = null;
       sharedLoadPromise = null;
     };
+    const loadLogs: string[] = [];
+    const handleLoadLog = ({ type, message }: { type: string; message: string }) => {
+      const line = `[${type}] ${message}`;
+      loadLogs.push(line);
+      if (/error|failed|invalid|unable|not found|unknown|denied/i.test(message)) {
+        onStatus?.(`FFmpeg ${message}`);
+      }
+    };
+    ffmpeg.on("log", handleLoadLog);
     sharedLoadPromise = withTimeout(
       ffmpeg.load(
         {
-          coreURL: resolveBundledAssetUrl("ffmpeg/ffmpeg-core.js"),
-          wasmURL: resolveBundledAssetUrl("ffmpeg/ffmpeg-core.wasm"),
-          classWorkerURL: resolveBundledAssetUrl("ffmpeg/ffmpeg-worker.js")
+          coreURL: assetUrls.coreURL,
+          wasmURL: assetUrls.wasmURL,
+          classWorkerURL: assetUrls.classWorkerURL
         },
         { signal }
       ),
       ffmpegLoadTimeoutMs,
-      "Loading converter",
+      "Loading MP4 encoder",
       resetEncoder
     )
-      .then(() => ffmpeg)
+      .then(() => {
+        ffmpeg.off("log", handleLoadLog);
+        logMp4("MP4 encoder loaded", { loadLogCount: loadLogs.length });
+        return ffmpeg;
+      })
       .catch((error) => {
+        ffmpeg.off("log", handleLoadLog);
         sharedFfmpeg = null;
         sharedLoadPromise = null;
+        const detail = error instanceof Error ? error.message : String(error);
+        logMp4("MP4 encoder load failed", { detail, loadLogs, assetUrls });
         throw error;
       });
   }
@@ -154,9 +252,40 @@ const getFfmpeg = async (signal?: AbortSignal, onStatus?: (message: string) => v
   return sharedLoadPromise;
 };
 
-export const convertWebMToMp4 = async ({ webmBlob, signal, onStatus, onProgress }: ConvertWebMToMp4Args) => {
+export const convertWebMToMp4 = async ({
+  webmBlob,
+  fps,
+  width,
+  height,
+  duration,
+  frameCount,
+  quality,
+  bitrateTarget,
+  crf,
+  preset,
+  signal,
+  onStatus,
+  onProgress
+}: ConvertWebMToMp4Args) => {
   await validateWebMBlob(webmBlob);
-  logMp4("Validated WebM input", { webmBlobSize: webmBlob.size, webmMimeType: webmBlob.type || "(empty)" });
+  const normalizedFps = Math.max(1, Math.min(60, Math.round(fps)));
+  const expectedDuration = frameCount / normalizedFps;
+  const maxrate = `${Math.max(1, Math.round(bitrateTarget / 1000))}k`;
+  const bufsize = `${Math.max(1, Math.round((bitrateTarget * 2) / 1000))}k`;
+  logMp4("Validated WebM input", {
+    webmBlobSize: webmBlob.size,
+    webmMimeType: webmBlob.type || "(empty)",
+    selectedFps: normalizedFps,
+    outputWidth: width,
+    outputHeight: height,
+    requestedDuration: duration,
+    expectedDuration,
+    frameCount,
+    quality,
+    bitrateTarget,
+    crf,
+    preset
+  });
   if (signal?.aborted) {
     throw createAbortError();
   }
@@ -173,7 +302,7 @@ export const convertWebMToMp4 = async ({ webmBlob, signal, onStatus, onProgress 
       throw new Error(detail);
     }
     console.error("[ASCII Studio MP4] Converter load failed", error);
-    throw new Error(`MP4 conversion failed. ${detail} Export WebM instead.`);
+    throw new Error(`MP4 conversion failed. ${detail} ${mp4EnvironmentFallback}`);
   }
   const exportId = createExportId();
   const inputName = `ascii-mp4-${exportId}-input.webm`;
@@ -213,13 +342,46 @@ export const convertWebMToMp4 = async ({ webmBlob, signal, onStatus, onProgress 
     await withTimeout(ffmpeg.writeFile(inputName, await fetchFile(webmBlob), { signal }), ffmpegReadTimeoutMs, "Writing WebM to FFmpeg FS");
 
     onStatus?.("Converting to MP4");
-    logMp4("Starting FFmpeg conversion", { inputName, outputName });
+    const ffmpegArgs = [
+      "-i",
+      inputName,
+      "-an",
+      "-vf",
+      `setpts=N/(${normalizedFps}*TB)`,
+      "-r",
+      String(normalizedFps),
+      "-c:v",
+      "libx264",
+      "-preset",
+      preset,
+      "-crf",
+      String(crf),
+      "-maxrate",
+      maxrate,
+      "-bufsize",
+      bufsize,
+      "-pix_fmt",
+      "yuv420p",
+      "-movflags",
+      "+faststart",
+      outputName
+    ];
+    logMp4("Starting FFmpeg conversion", {
+      inputName,
+      outputName,
+      args: ffmpegArgs,
+      selectedFps: normalizedFps,
+      outputWidth: width,
+      outputHeight: height,
+      frameCount,
+      expectedDuration,
+      bitrateTarget,
+      crf,
+      preset,
+      quality
+    });
     const exitCode = await withTimeout(
-      ffmpeg.exec(
-        ["-i", inputName, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-movflags", "faststart", outputName],
-        ffmpegExecTimeoutMs,
-        { signal }
-      ),
+      ffmpeg.exec(ffmpegArgs, ffmpegExecTimeoutMs, { signal }),
       ffmpegExecTimeoutMs + 5_000,
       "Converting to MP4",
       () => {
@@ -231,7 +393,16 @@ export const convertWebMToMp4 = async ({ webmBlob, signal, onStatus, onProgress 
     if (exitCode !== 0) {
       throw new Error(`FFmpeg exited with code ${exitCode}.${summarizeLogs(logs)}`);
     }
-    logMp4("FFmpeg conversion finished", { outputName, exitCode });
+    logMp4("FFmpeg conversion finished", {
+      outputName,
+      exitCode,
+      selectedFps: normalizedFps,
+      frameCount,
+      expectedDuration,
+      bitrateTarget,
+      crf,
+      preset
+    });
 
     onStatus?.("Reading MP4 output");
     logMp4("Reading MP4 output", { outputName });
@@ -248,7 +419,20 @@ export const convertWebMToMp4 = async ({ webmBlob, signal, onStatus, onProgress 
     if (mp4Blob.size <= 0 || mp4Blob.type !== "video/mp4") {
       throw new Error("MP4 conversion produced an invalid MP4 blob.");
     }
-    logMp4("Validated MP4 output", { outputName, mp4ByteSize: mp4Blob.size, mp4MimeType: mp4Blob.type });
+    logMp4("Validated MP4 output", {
+      outputName,
+      mp4ByteSize: mp4Blob.size,
+      mp4MimeType: mp4Blob.type,
+      selectedFps: normalizedFps,
+      outputWidth: width,
+      outputHeight: height,
+      frameCount,
+      expectedDuration,
+      bitrateTarget,
+      crf,
+      preset,
+      quality
+    });
     return mp4Blob;
   } catch (error) {
     if (aborted || signal?.aborted) {
@@ -256,7 +440,7 @@ export const convertWebMToMp4 = async ({ webmBlob, signal, onStatus, onProgress 
     }
     const detail = error instanceof Error ? error.message : "Unknown FFmpeg error.";
     console.error("[ASCII Studio MP4] Conversion failed", { detail, logs });
-    throw new Error(`MP4 conversion failed. ${detail}${summarizeLogs(logs)} Export WebM instead.`);
+    throw new Error(`MP4 conversion failed. ${detail}${summarizeLogs(logs)} ${mp4EnvironmentFallback}`);
   } finally {
     ffmpeg.off("progress", handleProgress);
     ffmpeg.off("log", handleLog);

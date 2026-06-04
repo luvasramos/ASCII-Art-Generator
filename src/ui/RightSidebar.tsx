@@ -345,10 +345,10 @@ export const RightSidebar = ({
       : frame.aspectRatio === "free" && sourceCanvasSize
         ? `Free ${sourceCanvasSize.width} x ${sourceCanvasSize.height}`
         : selectedRatio.label;
-  const outputWidth = grid ? Math.max(1, Math.round(grid.width * exportScale)) : null;
-  const outputHeight = grid ? Math.max(1, Math.round(grid.height * exportScale)) : null;
-  const physicalWidth = outputWidth ? outputWidth / Math.max(1, frame.dpi) : null;
-  const physicalHeight = outputHeight ? outputHeight / Math.max(1, frame.dpi) : null;
+  const canvasWidth = grid ? Math.max(1, Math.round(grid.width)) : null;
+  const canvasHeight = grid ? Math.max(1, Math.round(grid.height)) : null;
+  const physicalWidth = canvasWidth ? canvasWidth / Math.max(1, frame.dpi) : null;
+  const physicalHeight = canvasHeight ? canvasHeight / Math.max(1, frame.dpi) : null;
   const activeRatioGroup = ratioGroups.find((group) => group.ids.includes(frame.aspectRatio));
   const ratioOrientation =
     frame.aspectRatio.startsWith("portrait") || frame.aspectRatio === "a3"
@@ -717,11 +717,11 @@ export const RightSidebar = ({
             </div>
             <div className="rounded-xl border border-white/[0.05] bg-black/20 px-3 py-2 text-[11px] leading-5 text-zinc-500">
               <div className="flex items-center justify-between gap-3">
-                <span>Output</span>
-                <span className="tabular-nums text-zinc-300">
-                  {outputWidth && outputHeight ? `${outputWidth} x ${outputHeight} px` : "No render"}
-                </span>
-              </div>
+                  <span>Canvas</span>
+                  <span className="tabular-nums text-zinc-300">
+                    {canvasWidth && canvasHeight ? `${canvasWidth} x ${canvasHeight} px` : "No render"}
+                  </span>
+                </div>
               <div className="flex items-center justify-between gap-3">
                 <span>DPI</span>
                 <span className="tabular-nums text-zinc-300">{frame.dpi}</span>

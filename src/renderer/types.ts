@@ -31,7 +31,7 @@ export type AnimationSpinDirection = "clockwise" | "counterclockwise";
 export type AnimationScaleMovement = "ease" | "constant";
 export type AmbientDirection = "vertical" | "horizontal" | "diagonal" | "circular" | "angle";
 export type EchoFadeCurve = "linear" | "smooth" | "exponential";
-export type AnimatedExportQuality = "small" | "balanced" | "high";
+export type AnimatedExportQuality = "preview" | "standard" | "high" | "master";
 export type ToneRangePreview = "shadows" | "midtones" | "highlights";
 
 export interface UploadedFontRecord {

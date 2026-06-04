@@ -134,7 +134,7 @@ export const defaultExportOptions: ExportOptions = {
   backgroundColor: "#050608",
   alphaThreshold: 8,
   videoFps: 24,
-  animatedExportQuality: "balanced"
+  animatedExportQuality: "standard"
 };
 
 export const defaultExportScale = 2;
