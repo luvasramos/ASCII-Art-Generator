@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>technical panel pattern</title>
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="butt" stroke-linejoin="miter">
+    <rect x="7" y="7" width="50" height="50" stroke-width="1.4" />
+    <line x1="18" y1="7" x2="18" y2="57" stroke-width="1.05" />
+    <line x1="31" y1="7" x2="31" y2="57" stroke-width="1.05" />
+    <line x1="43" y1="7" x2="43" y2="57" stroke-width="1.05" />
+    <line x1="7" y1="17" x2="57" y2="17" stroke-width="1.05" />
+    <line x1="7" y1="29" x2="57" y2="29" stroke-width="1.05" />
+    <line x1="7" y1="41" x2="57" y2="41" stroke-width="1.05" />
+    <line x1="7" y1="51" x2="57" y2="51" stroke-width="1.05" />
+    <rect x="12" y="12" width="9" height="7" fill="#FFFFFF" stroke="none" />
+    <rect x="45" y="11" width="7" height="10" fill="#FFFFFF" stroke="none" />
+    <rect x="23" y="45" width="13" height="7" fill="#FFFFFF" stroke="none" />
+    <circle cx="43" cy="44" r="3" stroke-width="1.2" />
+    <line x1="12" y1="37" x2="52" y2="37" stroke-width="1" />
+  </g>
+</svg>

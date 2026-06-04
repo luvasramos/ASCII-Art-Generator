@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>small ring</title>
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="butt" stroke-linejoin="miter">
+    <circle cx="32" cy="32" r="6" stroke-width="1.7" />
+    <circle cx="28" cy="32" r="0.9" fill="#FFFFFF" stroke="none" />
+    <circle cx="36" cy="32" r="0.9" fill="#FFFFFF" stroke="none" />
+  </g>
+</svg>

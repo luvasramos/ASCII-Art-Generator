@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>dense radial</title>
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="butt" stroke-linejoin="miter">
+    <circle cx="32" cy="32" r="23" stroke-width="1.4" />
+    <circle cx="32" cy="32" r="15" stroke-width="1.25" />
+    <circle cx="32" cy="32" r="7" stroke-width="1.1" />
+    <line x1="35.966" y1="32.522" x2="56.786" y2="35.263" stroke-width="1.1" />
+    <line x1="35.696" y1="33.531" x2="55.097" y2="41.567" stroke-width="1.1" />
+    <line x1="35.173" y1="34.435" x2="51.834" y2="47.219" stroke-width="1.1" />
+    <line x1="34.435" y1="35.173" x2="47.219" y2="51.834" stroke-width="1.1" />
+    <line x1="33.531" y1="35.696" x2="41.567" y2="55.097" stroke-width="1.1" />
+    <line x1="32.522" y1="35.966" x2="35.263" y2="56.786" stroke-width="1.1" />
+    <line x1="31.478" y1="35.966" x2="28.737" y2="56.786" stroke-width="1.1" />
+    <line x1="30.469" y1="35.696" x2="22.433" y2="55.097" stroke-width="1.1" />
+    <line x1="29.565" y1="35.173" x2="16.781" y2="51.834" stroke-width="1.1" />
+    <line x1="28.827" y1="34.435" x2="12.166" y2="47.219" stroke-width="1.1" />
+    <line x1="28.304" y1="33.531" x2="8.903" y2="41.567" stroke-width="1.1" />
+    <line x1="28.034" y1="32.522" x2="7.214" y2="35.263" stroke-width="1.1" />
+    <line x1="28.034" y1="31.478" x2="7.214" y2="28.737" stroke-width="1.1" />
+    <line x1="28.304" y1="30.469" x2="8.903" y2="22.433" stroke-width="1.1" />
+    <line x1="28.827" y1="29.565" x2="12.166" y2="16.781" stroke-width="1.1" />
+    <line x1="29.565" y1="28.827" x2="16.781" y2="12.166" stroke-width="1.1" />
+    <line x1="30.469" y1="28.304" x2="22.433" y2="8.903" stroke-width="1.1" />
+    <line x1="31.478" y1="28.034" x2="28.737" y2="7.214" stroke-width="1.1" />
+    <line x1="32.522" y1="28.034" x2="35.263" y2="7.214" stroke-width="1.1" />
+    <line x1="33.531" y1="28.304" x2="41.567" y2="8.903" stroke-width="1.1" />
+    <line x1="34.435" y1="28.827" x2="47.219" y2="12.166" stroke-width="1.1" />
+    <line x1="35.173" y1="29.565" x2="51.834" y2="16.781" stroke-width="1.1" />
+    <line x1="35.696" y1="30.469" x2="55.097" y2="22.433" stroke-width="1.1" />
+    <line x1="35.966" y1="31.478" x2="56.786" y2="28.737" stroke-width="1.1" />
+  </g>
+</svg>

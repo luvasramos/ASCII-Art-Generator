@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>diamond plus ring</title>
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="butt" stroke-linejoin="miter">
+    <circle cx="32" cy="32" r="22" stroke-width="1.45" />
+    <polygon points="32,8 56,32 32,56 8,32" stroke-width="1.65" />
+    <polygon points="32,18 46,32 32,46 18,32" stroke-width="1.35" />
+    <line x1="41.659" y1="34.588" x2="52.284" y2="37.435" stroke-width="1.05" />
+    <line x1="39.071" y1="39.071" x2="46.849" y2="46.849" stroke-width="1.05" />
+    <line x1="34.588" y1="41.659" x2="37.435" y2="52.284" stroke-width="1.05" />
+    <line x1="29.412" y1="41.659" x2="26.565" y2="52.284" stroke-width="1.05" />
+    <line x1="24.929" y1="39.071" x2="17.151" y2="46.849" stroke-width="1.05" />
+    <line x1="22.341" y1="34.588" x2="11.716" y2="37.435" stroke-width="1.05" />
+    <line x1="22.341" y1="29.412" x2="11.716" y2="26.565" stroke-width="1.05" />
+    <line x1="24.929" y1="24.929" x2="17.151" y2="17.151" stroke-width="1.05" />
+    <line x1="29.412" y1="22.341" x2="26.565" y2="11.716" stroke-width="1.05" />
+    <line x1="34.588" y1="22.341" x2="37.435" y2="11.716" stroke-width="1.05" />
+    <line x1="39.071" y1="24.929" x2="46.849" y2="17.151" stroke-width="1.05" />
+    <line x1="41.659" y1="29.412" x2="52.284" y2="26.565" stroke-width="1.05" />
+  </g>
+</svg>

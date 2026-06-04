@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>double ring</title>
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="butt" stroke-linejoin="miter">
+    <circle cx="32" cy="32" r="7" stroke-width="1.5" />
+    <circle cx="32" cy="32" r="14" stroke-width="1.6" />
+    <line x1="40.315" y1="35.444" x2="44.934" y2="37.358" stroke-width="1" />
+    <line x1="35.444" y1="40.315" x2="37.358" y2="44.934" stroke-width="1" />
+    <line x1="28.556" y1="40.315" x2="26.642" y2="44.934" stroke-width="1" />
+    <line x1="23.685" y1="35.444" x2="19.066" y2="37.358" stroke-width="1" />
+    <line x1="23.685" y1="28.556" x2="19.066" y2="26.642" stroke-width="1" />
+    <line x1="28.556" y1="23.685" x2="26.642" y2="19.066" stroke-width="1" />
+    <line x1="35.444" y1="23.685" x2="37.358" y2="19.066" stroke-width="1" />
+    <line x1="40.315" y1="28.556" x2="44.934" y2="26.642" stroke-width="1" />
+  </g>
+</svg>

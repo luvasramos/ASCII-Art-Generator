@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>filled rounded square</title>
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="butt" stroke-linejoin="miter">
+    <rect x="23" y="23" width="18" height="18" rx="4" fill="#FFFFFF" stroke="none" />
+    <rect x="19" y="19" width="26" height="26" rx="5" stroke-width="1" />
+  </g>
+</svg>

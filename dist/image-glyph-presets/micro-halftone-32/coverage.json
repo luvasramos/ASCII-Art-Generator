@@ -1,0 +1,194 @@
+[
+  {
+    "index": 0,
+    "file": "glyph_00.svg",
+    "source": "empty",
+    "coverage": 0
+  },
+  {
+    "index": 1,
+    "file": "glyph_01.svg",
+    "source": "tiny dot",
+    "coverage": 0.317
+  },
+  {
+    "index": 2,
+    "file": "glyph_02.svg",
+    "source": "small dot",
+    "coverage": 1.239
+  },
+  {
+    "index": 3,
+    "file": "glyph_03.svg",
+    "source": "thin ring",
+    "coverage": 2.997
+  },
+  {
+    "index": 4,
+    "file": "glyph_04.svg",
+    "source": "ring with dot",
+    "coverage": 4.199
+  },
+  {
+    "index": 5,
+    "file": "glyph_05.svg",
+    "source": "small plus",
+    "coverage": 6.226
+  },
+  {
+    "index": 6,
+    "file": "glyph_06.svg",
+    "source": "diamond outline",
+    "coverage": 7.007
+  },
+  {
+    "index": 7,
+    "file": "glyph_07.svg",
+    "source": "small x",
+    "coverage": 8.173
+  },
+  {
+    "index": 8,
+    "file": "glyph_08.svg",
+    "source": "double ring",
+    "coverage": 9.564
+  },
+  {
+    "index": 9,
+    "file": "glyph_09.svg",
+    "source": "square outline with dot",
+    "coverage": 10.614
+  },
+  {
+    "index": 10,
+    "file": "glyph_10.svg",
+    "source": "early dot screen",
+    "coverage": 11.151
+  },
+  {
+    "index": 11,
+    "file": "glyph_11.svg",
+    "source": "filled diamond",
+    "coverage": 15.82
+  },
+  {
+    "index": 12,
+    "file": "glyph_12.svg",
+    "source": "small grid",
+    "coverage": 25.861
+  },
+  {
+    "index": 13,
+    "file": "glyph_13.svg",
+    "source": "micro checker block",
+    "coverage": 28.125
+  },
+  {
+    "index": 14,
+    "file": "glyph_14.svg",
+    "source": "ring grid",
+    "coverage": 29.42
+  },
+  {
+    "index": 15,
+    "file": "glyph_15.svg",
+    "source": "diamond lattice",
+    "coverage": 32.48
+  },
+  {
+    "index": 16,
+    "file": "glyph_16.svg",
+    "source": "woven center",
+    "coverage": 34.587
+  },
+  {
+    "index": 17,
+    "file": "glyph_17.svg",
+    "source": "dense crosshatch block",
+    "coverage": 36.475
+  },
+  {
+    "index": 18,
+    "file": "glyph_18.svg",
+    "source": "dense lattice block",
+    "coverage": 36.668
+  },
+  {
+    "index": 19,
+    "file": "glyph_19.svg",
+    "source": "crosshatch core",
+    "coverage": 38.765
+  },
+  {
+    "index": 20,
+    "file": "glyph_20.svg",
+    "source": "full-cell ring screen",
+    "coverage": 50.391
+  },
+  {
+    "index": 21,
+    "file": "glyph_21.svg",
+    "source": "checker core",
+    "coverage": 51.66
+  },
+  {
+    "index": 22,
+    "file": "glyph_22.svg",
+    "source": "full-cell checker tone",
+    "coverage": 56.25
+  },
+  {
+    "index": 23,
+    "file": "glyph_23.svg",
+    "source": "full-cell dot screen",
+    "coverage": 71.484
+  },
+  {
+    "index": 24,
+    "file": "glyph_24.svg",
+    "source": "full-cell crosshatch",
+    "coverage": 71.704
+  },
+  {
+    "index": 25,
+    "file": "glyph_25.svg",
+    "source": "full-cell grid tone",
+    "coverage": 75
+  },
+  {
+    "index": 26,
+    "file": "glyph_26.svg",
+    "source": "full-cell dense checker",
+    "coverage": 76.563
+  },
+  {
+    "index": 27,
+    "file": "glyph_27.svg",
+    "source": "full-cell medium screen tone",
+    "coverage": 81.25
+  },
+  {
+    "index": 28,
+    "file": "glyph_28.svg",
+    "source": "full-cell woven tone",
+    "coverage": 89.966
+  },
+  {
+    "index": 29,
+    "file": "glyph_29.svg",
+    "source": "near-solid line screen",
+    "coverage": 92.188
+  },
+  {
+    "index": 30,
+    "file": "glyph_30.svg",
+    "source": "full-cell diagonal hatch",
+    "coverage": 96.155
+  },
+  {
+    "index": 31,
+    "file": "glyph_31.svg",
+    "source": "solid full cell",
+    "coverage": 100
+  }
+]
