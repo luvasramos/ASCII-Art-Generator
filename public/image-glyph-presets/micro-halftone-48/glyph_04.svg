@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>outlined circle</title>
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="butt" stroke-linejoin="miter">
+    <circle cx="32" cy="32" r="4.8" stroke-width="1.1" />
+  </g>
+</svg>

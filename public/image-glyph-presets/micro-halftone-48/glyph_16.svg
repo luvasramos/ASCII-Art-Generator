@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>diamond outline</title>
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="butt" stroke-linejoin="miter">
+    <polygon points="32,22 42,32 32,42 22,32" stroke-width="1.15" />
+  </g>
+</svg>

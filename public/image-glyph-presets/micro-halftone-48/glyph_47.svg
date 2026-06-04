@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>full square</title>
+  <g fill="none" stroke="#FFFFFF" stroke-linecap="butt" stroke-linejoin="miter">
+    <rect x="8" y="8" width="48" height="48" fill="#FFFFFF" stroke="none" />
+  </g>
+</svg>

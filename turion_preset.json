@@ -1,0 +1,78 @@
+{
+  "kind": "ascii-rendering-studio-preset",
+  "version": 1,
+  "name": "Turion",
+  "settings": {
+    "font": {
+      "family": "Geist-VariableFont_wght 1778793041160",
+      "size": 13,
+      "weight": 500,
+      "lineHeight": 1,
+      "letterSpacing": 0,
+      "smoothing": true,
+      "antiAlias": true
+    },
+    "ascii": {
+      "characterDensity": 0.25,
+      "characterScale": 1,
+      "spacingX": 1,
+      "spacingY": 1,
+      "edgeEmphasis": 1,
+      "luminanceCurve": 1,
+      "glyphOpacity": 1,
+      "backgroundOpacity": 1,
+      "charset": "@#WMBRXVYIti+=;:.█▓▒░.",
+      "selectedPresetId": "custom-1778794026344"
+    },
+    "image": {
+      "brightness": 0,
+      "contrast": 1,
+      "exposure": 0,
+      "sharpen": 0,
+      "blur": 0,
+      "threshold": 0,
+      "posterization": 0,
+      "blackPoint": 0,
+      "whitePoint": 0.55
+    },
+    "frame": {
+      "aspectRatio": "square",
+      "cropMode": "contain",
+      "customCanvasWidth": 1200,
+      "customCanvasHeight": 900,
+      "imageScale": 124,
+      "imageOffsetX": 0,
+      "imageOffsetY": 0
+    },
+    "breakup": {
+      "amount": 60,
+      "spread": 80,
+      "density": 3,
+      "chunkSize": 2,
+      "clusterAmount": 20,
+      "erosionAmount": 100,
+      "randomness": 0,
+      "directionBias": "left",
+      "fadeStrength": 0,
+      "seed": 1337
+    },
+    "color": {
+      "paletteMode": "custom",
+      "foregroundColor": "#f1f1f1",
+      "backgroundColor": "#000000",
+      "foregroundCurve": 1,
+      "backgroundCurve": 1,
+      "tonalCompression": 0,
+      "tonalBands": 0,
+      "shadowCrush": 0.1,
+      "highlightClip": 0,
+      "invert": false
+    },
+    "exportOptions": {
+      "transparentBackground": true,
+      "backgroundColor": "#050608",
+      "alphaThreshold": 80
+    },
+    "exportScale": 2
+  }
+}
