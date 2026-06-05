@@ -7,6 +7,7 @@ export type BuiltInFont =
 
 export type AsciiGlyphMode = "characters" | "images";
 export type PaletteMode = "grayscale" | "custom" | "single" | "source";
+export type SourceColorMapping = "palette-map" | "source-match";
 
 export type AspectRatioId =
   | "free"
@@ -192,6 +193,7 @@ export interface ColorSettings {
   sourcePaletteOriginal: string[];
   sourcePalette: string[];
   sourcePaletteSize: number;
+  sourceColorMapping: SourceColorMapping;
   foregroundCurve: number;
   backgroundCurve: number;
   tonalCompression: number;
@@ -239,6 +241,9 @@ export interface CellMetrics {
   x: number;
   y: number;
   luminance: number;
+  sourceR: number;
+  sourceG: number;
+  sourceB: number;
   alpha: number;
   coverage: number;
   localContrast: number;

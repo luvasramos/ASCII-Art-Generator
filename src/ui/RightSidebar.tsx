@@ -1795,6 +1795,17 @@ export const RightSidebar = ({
                   </IconButton>
                 </div>
               </div>
+              <Select
+                label="Mapping"
+                value={color.sourceColorMapping}
+                options={[
+                  { value: "palette-map", label: "Palette Map" },
+                  { value: "source-match", label: "Source Match" }
+                ]}
+                onChange={(sourceColorMapping) =>
+                  updateColor({ sourceColorMapping: sourceColorMapping as typeof color.sourceColorMapping })
+                }
+              />
               <div className="grid grid-cols-2 gap-2">
                 <CommandButton
                   variant="secondary"

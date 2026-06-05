@@ -300,6 +300,9 @@ export const applyEdgeBreakup = (cells: CellRenderData[], options: WorkerRenderO
             : selectDustGlyph(glyphPool, clamp01(distanceRatio + sourceDistance * 0.12));
         target.foreground = clamp01(source.foreground * (0.54 + particleFade * 0.62));
         target.background = clamp01(source.background * (0.22 + particleFade * 0.56));
+        target.sourceR = source.sourceR;
+        target.sourceG = source.sourceG;
+        target.sourceB = source.sourceB;
         target.foregroundAlpha = Math.max(
           0.12,
           particleFade * (0.42 + edgeStrength * 0.54) * (0.6 + chunkWeight * 0.4)
@@ -347,6 +350,9 @@ export const applyEdgeBreakup = (cells: CellRenderData[], options: WorkerRenderO
       target.glyph = selectDustGlyph(glyphPool, distanceRatio);
       target.foreground = clamp01(cell.foreground * (0.36 + particleFade * 0.66));
       target.background = 0;
+      target.sourceR = cell.sourceR;
+      target.sourceG = cell.sourceG;
+      target.sourceB = cell.sourceB;
       target.foregroundAlpha = Math.max(0.06, particleFade * (0.28 + edgeStrength * 0.58) * (0.58 + field * 0.42));
       target.backgroundAlpha = 0;
       target.isParticle = true;

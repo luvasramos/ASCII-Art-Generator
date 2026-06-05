@@ -81,6 +81,7 @@ export const defaultColorSettings: ColorSettings = {
   sourcePaletteOriginal: ["#050608", "#2A3556", "#9F39FF", "#F3F0E7"],
   sourcePalette: ["#050608", "#2A3556", "#9F39FF", "#F3F0E7"],
   sourcePaletteSize: 8,
+  sourceColorMapping: "palette-map",
   foregroundCurve: 0.86,
   backgroundCurve: 1.08,
   tonalCompression: 0.08,

@@ -1,4 +1,4 @@
-import type { ColorSettings } from "../renderer/types";
+import type { CellRenderData, ColorSettings } from "../renderer/types";
 
 export interface Rgb {
   r: number;
@@ -68,6 +68,57 @@ const samplePalette = (value: number, palette: string[]) => {
 const pickPaletteColor = (value: number, palette: string[]) => {
   const index = Math.min(palette.length - 1, Math.max(0, Math.round(clamp01(value) * (palette.length - 1))));
   return parseHexColor(palette[index]);
+};
+
+const paletteRgbCache = new Map<string, Rgb[]>();
+
+const paletteCacheKey = (palette: string[]) => palette.join("|").toUpperCase();
+
+const safePaletteRgb = (settings: ColorSettings) => {
+  const palette = safePalette(settings);
+  const key = paletteCacheKey(palette);
+  const cached = paletteRgbCache.get(key);
+  if (cached) {
+    return cached;
+  }
+  const parsed = palette.map(parseHexColor);
+  if (paletteRgbCache.size > 64) {
+    paletteRgbCache.clear();
+  }
+  paletteRgbCache.set(key, parsed);
+  return parsed;
+};
+
+const nearestPaletteRgb = (source: Rgb, palette: Rgb[]) => {
+  let nearest = palette[0] ?? { r: 0, g: 0, b: 0 };
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const color of palette) {
+    const dr = source.r - color.r;
+    const dg = source.g - color.g;
+    const db = source.b - color.b;
+    const distance = dr * dr + dg * dg + db * db;
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      nearest = color;
+    }
+  }
+  return nearest;
+};
+
+const rgbToCss = ({ r, g, b }: Rgb) => `rgb(${clampByte(r)}, ${clampByte(g)}, ${clampByte(b)})`;
+
+export const isSourceMatchMode = (settings: ColorSettings) =>
+  settings.paletteMode === "source" && settings.sourceColorMapping === "source-match";
+
+export const resolveDisplaySourceMatchColor = (cell: CellRenderData, settings: ColorSettings) => {
+  const source = {
+    r: clampByte(cell.sourceR),
+    g: clampByte(cell.sourceG),
+    b: clampByte(cell.sourceB)
+  };
+  const matched = nearestPaletteRgb(source, safePaletteRgb(settings));
+  const color = rgbToCss(matched);
+  return settings.invert ? invertCssColor(color) : color;
 };
 
 export const resolveCellColor = (

@@ -36,6 +36,7 @@ export const generateRenderGrid = (imageData: ImageData, options: WorkerRenderOp
       sampledMetrics.push(
         sampleCellMetrics(
           luminance,
+          imageData.data,
           edges,
           width,
           height,

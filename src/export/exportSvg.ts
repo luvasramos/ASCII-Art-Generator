@@ -1,4 +1,4 @@
-import { invertCssColor, resolveDisplayCellColor } from "../quantization/color";
+import { invertCssColor, isSourceMatchMode, resolveDisplayCellColor, resolveDisplaySourceMatchColor } from "../quantization/color";
 import { getImageGlyphIndexForBrightness } from "../atlas/imageGlyphAtlas";
 import { resolveCellFittedFontSize } from "../atlas/glyphAtlas";
 import { normalizeCharacterSet } from "../ascii/charset";
@@ -56,6 +56,7 @@ export const exportSvg = ({ grid, font, ascii, color, exportOptions, fileName }:
   );
   const alphaThreshold = exportOptions.alphaThreshold / 100;
   const duotoneMode = color.paletteMode === "single";
+  const sourceMatchMode = isSourceMatchMode(color);
   const imageGlyphs = ascii.glyphMode === "images" && ascii.imageGlyphs.length >= 2 ? ascii.imageGlyphs : [];
   const imageGlyphMapper = imageGlyphs.length
     ? createImageGlyphBrightnessMapper(grid.cells, imageGlyphs.length, ascii.glyphOpacity)
@@ -99,7 +100,9 @@ export const exportSvg = ({ grid, font, ascii, color, exportOptions, fileName }:
     .filter((cell) => !exportOptions.transparentBackground || cell.isParticle || cell.coverage >= alphaThreshold)
     .filter((cell) => cell.backgroundAlpha > 0)
     .map((cell) => {
-      const fill = resolveDisplayCellColor(quantizeBrightness(cell.background), color, "background");
+      const fill = sourceMatchMode
+        ? resolveDisplaySourceMatchColor(cell, color)
+        : resolveDisplayCellColor(quantizeBrightness(cell.background), color, "background");
       const opacity = !duotoneMode && cell.backgroundAlpha < 1 ? ` opacity="${formatNumber(cell.backgroundAlpha)}"` : "";
       return `<rect x="${formatNumber(cell.x * stepX)}" y="${formatNumber(cell.y * stepY)}" width="${formatNumber(
         backgroundCellWidth
@@ -116,7 +119,9 @@ export const exportSvg = ({ grid, font, ascii, color, exportOptions, fileName }:
         if (!imageGlyph) {
           return "";
         }
-        const fill = resolveDisplayCellColor(quantizeBrightness(cell.foreground), color, "foreground");
+        const fill = sourceMatchMode
+          ? resolveDisplaySourceMatchColor(cell, color)
+          : resolveDisplayCellColor(quantizeBrightness(cell.foreground), color, "foreground");
         const filterId = getImageTintFilterId(fill);
         const drawWidth = cellWidth * ascii.characterScale;
         const drawHeight = cellHeight * ascii.characterScale;
@@ -127,7 +132,9 @@ export const exportSvg = ({ grid, font, ascii, color, exportOptions, fileName }:
           drawWidth
         )}" height="${formatNumber(drawHeight)}" preserveAspectRatio="xMidYMid slice" filter="url(#${filterId})"${opacity} />`;
       }
-      const fill = resolveDisplayCellColor(quantizeBrightness(cell.foreground), color, "foreground");
+      const fill = sourceMatchMode
+        ? resolveDisplaySourceMatchColor(cell, color)
+        : resolveDisplayCellColor(quantizeBrightness(cell.foreground), color, "foreground");
       const opacity = !duotoneMode && cell.foregroundAlpha < 1 ? ` opacity="${formatNumber(cell.foregroundAlpha)}"` : "";
       return `<text x="${formatNumber(cell.x * stepX + cellWidth / 2)}" y="${formatNumber(
         cell.y * stepY + cellHeight / 2

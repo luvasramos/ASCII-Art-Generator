@@ -245,6 +245,9 @@ const emptyMetrics = (cellX: number, cellY: number): CellMetrics => ({
   x: cellX,
   y: cellY,
   luminance: 0,
+  sourceR: 0,
+  sourceG: 0,
+  sourceB: 0,
   alpha: 0,
   coverage: 0,
   localContrast: 0,
@@ -255,6 +258,7 @@ const emptyMetrics = (cellX: number, cellY: number): CellMetrics => ({
 
 export const sampleCellMetrics = (
   luminance: Float32Array,
+  sourceData: Uint8ClampedArray,
   edges: EdgeMaps,
   width: number,
   height: number,
@@ -335,11 +339,17 @@ export const sampleCellMetrics = (
   let edgeSum = 0;
   let gx = 0;
   let gy = 0;
+  let sourceR = 0;
+  let sourceG = 0;
+  let sourceB = 0;
+  let sourceWeight = 0;
   let count = 0;
 
   for (let py = startY; py < endY; py += 1) {
     for (let px = startX; px < endX; px += 1) {
       const index = py * width + px;
+      const sourceIndex = index * 4;
+      const sourceAlpha = sourceData[sourceIndex + 3] / 255;
       const value = luminance[index];
       sum += value;
       alphaSum += alphaMap[index];
@@ -350,17 +360,27 @@ export const sampleCellMetrics = (
       edgeSum += edges.magnitude[index];
       gx += edges.gradientX[index];
       gy += edges.gradientY[index];
+      if (sourceAlpha > 0.001) {
+        sourceR += sourceData[sourceIndex] * sourceAlpha;
+        sourceG += sourceData[sourceIndex + 1] * sourceAlpha;
+        sourceB += sourceData[sourceIndex + 2] * sourceAlpha;
+        sourceWeight += sourceAlpha;
+      }
       count += 1;
     }
   }
 
   const luminanceAverage = sum / Math.max(1, count);
   const variance = Math.max(0, sumSq / Math.max(1, count) - luminanceAverage * luminanceAverage);
+  const safeSourceWeight = Math.max(1, sourceWeight);
 
   return {
     x: cellX,
     y: cellY,
     luminance: luminanceAverage,
+    sourceR: sourceWeight > 0 ? sourceR / safeSourceWeight : 0,
+    sourceG: sourceWeight > 0 ? sourceG / safeSourceWeight : 0,
+    sourceB: sourceWeight > 0 ? sourceB / safeSourceWeight : 0,
     alpha: alphaSum / Math.max(1, count),
     coverage: coverageSum / Math.max(1, count),
     localContrast: max - min,

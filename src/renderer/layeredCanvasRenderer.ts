@@ -1,7 +1,13 @@
 import type { AsciiSettings, ColorSettings, ExportOptions, FontSettings, GlyphMetric, RenderGrid } from "./types";
 import type { GlyphAtlas } from "../atlas/glyphAtlas";
 import { getImageGlyphIndexForBrightness, type ImageGlyphAtlas } from "../atlas/imageGlyphAtlas";
-import { invertCssColor, resolveCellColor, resolveDisplayCellColor } from "../quantization/color";
+import {
+  invertCssColor,
+  isSourceMatchMode,
+  resolveCellColor,
+  resolveDisplayCellColor,
+  resolveDisplaySourceMatchColor
+} from "../quantization/color";
 import type { AnimationSettings } from "./types";
 import { resolveRenderAnimationState } from "./animationEffects";
 import type { ImageGlyphAtlasEntry } from "../atlas/imageGlyphAtlas";
@@ -235,6 +241,7 @@ export const renderAsciiLayers = ({
 
   const transparentBackground = exportOptions?.transparentBackground ?? false;
   const alphaThreshold = (exportOptions?.alphaThreshold ?? 0) / 100;
+  const sourceMatchMode = isSourceMatchMode(color);
 
   if (!transparentBackground) {
     const baseBackground = duotoneMode
@@ -253,7 +260,9 @@ export const renderAsciiLayers = ({
     if (cell.backgroundAlpha <= 0) {
       continue;
     }
-    const resolvedBackground = resolveDisplayCellColor(quantizeBrightness(cell.background), color, "background");
+    const resolvedBackground = sourceMatchMode
+      ? resolveDisplaySourceMatchColor(cell, color)
+      : resolveDisplayCellColor(quantizeBrightness(cell.background), color, "background");
     const bg = duotoneMode ? resolvedBackground : scaleColorBrightness(resolvedBackground, animationState.brightnessMultiplier);
     backgroundCtx.fillStyle = bg;
     backgroundCtx.globalAlpha = duotoneMode ? 1 : cell.backgroundAlpha;
@@ -296,7 +305,9 @@ export const renderAsciiLayers = ({
         continue;
       }
       imageGlyphMapper?.record(imageGlyphIndex);
-      const resolvedGlyphColor = resolveDisplayCellColor(quantizeBrightness(cell.foreground), color, "foreground");
+      const resolvedGlyphColor = sourceMatchMode
+        ? resolveDisplaySourceMatchColor(cell, color)
+        : resolveDisplayCellColor(quantizeBrightness(cell.foreground), color, "foreground");
       const glyphColor = duotoneMode ? resolvedGlyphColor : scaleColorBrightness(resolvedGlyphColor, animationState.brightnessMultiplier);
       const tintedGlyph = getTintedImageGlyphCanvas(imageGlyph, glyphColor, duotoneMode);
       const drawWidth = grid.cellWidth * ascii.characterScale * animationState.glyphScaleMultiplier;
@@ -309,7 +320,9 @@ export const renderAsciiLayers = ({
       glyphCtx.restore();
       continue;
     }
-    const resolvedForeground = resolveDisplayCellColor(quantizeBrightness(cell.foreground), color, "foreground");
+    const resolvedForeground = sourceMatchMode
+      ? resolveDisplaySourceMatchColor(cell, color)
+      : resolveDisplayCellColor(quantizeBrightness(cell.foreground), color, "foreground");
     const fg = duotoneMode ? resolvedForeground : scaleColorBrightness(resolvedForeground, animationState.brightnessMultiplier);
     const glyph = atlas.getTintedGlyph(cell.glyph, fg);
     if (!glyph) {
