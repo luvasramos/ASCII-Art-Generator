@@ -7,7 +7,6 @@ import {
   ChevronDown,
   CircleDot,
   Contrast,
-  Copy,
   Crop,
   Download,
   FlipHorizontal,
@@ -205,9 +204,6 @@ const aspectValueForId = (id: AspectRatioId) => {
 export const RightSidebar = ({
   grid,
   onFontFile,
-  canRefreshSourcePalette,
-  sourcePaletteExtracting,
-  onRefreshSourcePalette,
   canAnimateImage,
   stillImageMode,
   onStillImageModeChange,
@@ -222,7 +218,6 @@ export const RightSidebar = ({
   const [characterPresetMessage, setCharacterPresetMessage] = useState<string | null>(null);
   const [settingsPresetName, setSettingsPresetName] = useState("");
   const [settingsPresetError, setSettingsPresetError] = useState<string | null>(null);
-  const [sourcePaletteMessage, setSourcePaletteMessage] = useState<string | null>(null);
   const [matrixOverlayOpen, setMatrixOverlayOpen] = useState(false);
   const [echoOpen, setEchoOpen] = useState(false);
   const {
@@ -386,17 +381,21 @@ export const RightSidebar = ({
     activeSourcePaletteOriginal[index] ??
     activeSourcePalette[index] ??
     defaultColorSettings.sourcePalette[index % defaultColorSettings.sourcePalette.length];
-  const activeSourcePaletteResetTargets = activeSourcePalette.map((_, index) => sourcePaletteResetColor(index));
-  const copySourcePaletteText = (text: string, successMessage: string) => {
-    if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
-      setSourcePaletteMessage("Clipboard unavailable");
-      return;
-    }
-    void navigator.clipboard.writeText(text).then(
-      () => setSourcePaletteMessage(successMessage),
-      () => setSourcePaletteMessage("Clipboard unavailable")
-    );
-  };
+  const sourcePaletteMatchesOriginal =
+    activeSourcePalette.length === activeSourcePaletteOriginal.length &&
+    activeSourcePalette.every((paletteColor, index) => paletteColor.toUpperCase() === activeSourcePaletteOriginal[index]?.toUpperCase());
+  const colorInvertControl = (
+    <div className="flex items-center justify-between rounded-xl border border-white/[0.06] bg-black/20 px-3 py-2">
+      <span className="text-xs text-zinc-500">Color invert</span>
+      <IconButton
+        title="Invert final output colors"
+        active={color.invert}
+        onClick={() => updateColor({ invert: !color.invert })}
+      >
+        <Contrast size={16} />
+      </IconButton>
+    </div>
+  );
   const resolveCanvasSizeForAspect = (aspectRatio: AspectRatioId) => {
     const ratio = aspectValueForId(aspectRatio);
     const width = clampCanvasDimension(displayedCanvasSize.width);
@@ -1681,6 +1680,7 @@ export const RightSidebar = ({
             ]}
             onChange={(paletteMode) => updateColor({ paletteMode: paletteMode as typeof color.paletteMode })}
           />
+          {color.paletteMode !== "source" && colorInvertControl}
           {color.paletteMode === "single" && (
             <div className="space-y-3">
               <ColorInput
@@ -1795,6 +1795,25 @@ export const RightSidebar = ({
                   </IconButton>
                 </div>
               </div>
+              <div className="grid grid-cols-2 gap-2">
+                <CommandButton
+                  variant="secondary"
+                  disabled={sourcePaletteMatchesOriginal}
+                  onClick={() => updateColor({ sourcePalette: activeSourcePaletteOriginal })}
+                >
+                  <RotateCcw size={16} />
+                  Reset all
+                </CommandButton>
+                <CommandButton
+                  variant="secondary"
+                  disabled={activeSourcePalette.length < 2}
+                  onClick={() => updateColor({ sourcePalette: [...activeSourcePalette].reverse() })}
+                >
+                  <FlipHorizontal size={16} />
+                  Reverse
+                </CommandButton>
+              </div>
+              {colorInvertControl}
               <div className="space-y-2">
                 {activeSourcePalette.map((paletteColor, index, palette) => {
                   const resetColor = sourcePaletteResetColor(index);
@@ -1817,8 +1836,7 @@ export const RightSidebar = ({
                           disabled={index === 0}
                           onClick={() =>
                             updateColor({
-                              sourcePalette: moveItem(palette, index, -1),
-                              sourcePaletteOriginal: moveItem(activeSourcePaletteResetTargets, index, -1)
+                              sourcePalette: moveItem(palette, index, -1)
                             })
                           }
                         >
@@ -1829,8 +1847,7 @@ export const RightSidebar = ({
                           disabled={index === palette.length - 1}
                           onClick={() =>
                             updateColor({
-                              sourcePalette: moveItem(palette, index, 1),
-                              sourcePaletteOriginal: moveItem(activeSourcePaletteResetTargets, index, 1)
+                              sourcePalette: moveItem(palette, index, 1)
                             })
                           }
                         >
@@ -1852,44 +1869,8 @@ export const RightSidebar = ({
                   );
                 })}
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <CommandButton
-                  variant="secondary"
-                  disabled={!canRefreshSourcePalette || sourcePaletteExtracting}
-                  onClick={() => {
-                    setSourcePaletteMessage(null);
-                    onRefreshSourcePalette();
-                  }}
-                >
-                  <RotateCcw size={16} />
-                  {sourcePaletteExtracting ? "Extracting" : "Refresh"}
-                </CommandButton>
-                <CommandButton
-                  variant="secondary"
-                  disabled={!activeSourcePalette.length}
-                  onClick={() => copySourcePaletteText(activeSourcePalette.join(" "), "Copied HEX colors")}
-                >
-                  <Copy size={16} />
-                  Copy HEX
-                </CommandButton>
-              </div>
-              {sourcePaletteMessage && (
-                <div className="rounded-xl border border-white/[0.06] bg-black/20 px-3 py-2 text-xs text-zinc-400">
-                  {sourcePaletteMessage}
-                </div>
-              )}
             </div>
           )}
-          <div className="flex items-center justify-between rounded-xl border border-white/[0.06] bg-black/20 px-3 py-2">
-            <span className="text-xs text-zinc-500">Color invert</span>
-            <IconButton
-              title="Invert final output colors"
-              active={color.invert}
-              onClick={() => updateColor({ invert: !color.invert })}
-            >
-              <Contrast size={16} />
-            </IconButton>
-          </div>
         </Section>
 
         <Section title="Presets" icon={<Save size={16} />} order={2} summary={selectedSettingsPreset?.name}>
