@@ -18,11 +18,34 @@ interface ConvertWebMToMp4Args {
   onProgress?: (progress: number) => void;
 }
 
+export interface Mp4PngSequenceFrame {
+  frameIndex: number;
+  totalFrames: number;
+  canvas: HTMLCanvasElement;
+}
+
+interface EncodePngSequenceToMp4Args {
+  frames: AsyncIterable<Mp4PngSequenceFrame>;
+  fps: number;
+  width: number;
+  height: number;
+  duration: number;
+  frameCount: number;
+  quality: AnimatedExportQuality;
+  bitrateTarget: number;
+  crf: number;
+  preset: "veryfast" | "medium" | "slow";
+  exportScale: number;
+  signal?: AbortSignal;
+  onStatus?: (message: string) => void;
+  onProgress?: (progress: number) => void;
+}
+
 let sharedFfmpeg: FFmpeg | null = null;
 let sharedLoadPromise: Promise<FFmpeg> | null = null;
 let exportSequence = 0;
 const ffmpegLoadTimeoutMs = 45_000;
-const ffmpegExecTimeoutMs = 180_000;
+const ffmpegExecTimeoutMs = 300_000;
 const ffmpegReadTimeoutMs = 45_000;
 const mp4EnvironmentFallback =
   "MP4 conversion could not start in this browser or hosting environment. You can export WebM now, or try localhost / Netlify / Cloudflare Pages for better MP4 support.";
@@ -134,6 +157,20 @@ const summarizeLogs = (logs: string[]) => {
   return tail ? ` ${tail}` : "";
 };
 
+const parseLastEncodedFrameCount = (logs: string[]) => {
+  for (let index = logs.length - 1; index >= 0; index -= 1) {
+    const matches = Array.from(logs[index].matchAll(/frame=\s*(\d+)/g));
+    const lastMatch = matches[matches.length - 1];
+    if (lastMatch) {
+      const frameCount = Number(lastMatch[1]);
+      if (Number.isFinite(frameCount) && frameCount > 0) {
+        return frameCount;
+      }
+    }
+  }
+  return null;
+};
+
 const createExportId = () => {
   exportSequence += 1;
   const random =
@@ -173,13 +210,16 @@ const verifyFfmpegAssets = async (
   await verifyFfmpegAsset("ffmpeg-worker.js", assetUrls.classWorkerURL, signal);
 };
 
+const isGeneratedExportFileName = (name: string) =>
+  name.endsWith(".webm") || name.endsWith(".mp4") || /^frame_\d{6}\.png$/i.test(name);
+
 const clearPreviousFfmpegVideoFiles = async (ffmpeg: FFmpeg) => {
   try {
     const nodes = await ffmpeg.listDir("/");
     await Promise.all(
       nodes
         .map((node) => node.name)
-        .filter((name) => name.endsWith(".webm") || name.endsWith(".mp4"))
+        .filter(isGeneratedExportFileName)
         .map(async (name) => {
           try {
             await ffmpeg.deleteFile(name);
@@ -250,6 +290,303 @@ const getFfmpeg = async (signal?: AbortSignal, onStatus?: (message: string) => v
   }
 
   return sharedLoadPromise;
+};
+
+const buildFrameFileName = (frameIndex: number) => `frame_${String(frameIndex + 1).padStart(6, "0")}.png`;
+
+const canvasToPngBlob = (canvas: HTMLCanvasElement, signal?: AbortSignal) =>
+  new Promise<Blob>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(createAbortError());
+      return;
+    }
+    canvas.toBlob((blob) => {
+      if (signal?.aborted) {
+        reject(createAbortError());
+        return;
+      }
+      if (!blob || blob.size <= 0) {
+        reject(new Error("MP4 frame PNG encoding produced no data."));
+        return;
+      }
+      resolve(blob);
+    }, "image/png");
+  });
+
+const createPaddedFrameCanvas = (width: number, height: number) => {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) {
+    throw new Error("Canvas2D is unavailable for MP4 frame encoding.");
+  }
+  ctx.imageSmoothingEnabled = false;
+  return { canvas, ctx };
+};
+
+export const encodePngSequenceToMp4 = async ({
+  frames,
+  fps,
+  width,
+  height,
+  duration,
+  frameCount,
+  quality,
+  bitrateTarget,
+  crf,
+  preset,
+  exportScale,
+  signal,
+  onStatus,
+  onProgress
+}: EncodePngSequenceToMp4Args) => {
+  const normalizedFps = Math.max(1, Math.min(60, Math.round(fps)));
+  const expectedDuration = frameCount / normalizedFps;
+  const maxrate = `${Math.max(1, Math.round(bitrateTarget / 1000))}k`;
+  const bufsize = `${Math.max(1, Math.round((bitrateTarget * 2) / 1000))}k`;
+  const outputName = `ascii-mp4-${createExportId()}-output.mp4`;
+  const writtenFrameNames: string[] = [];
+  const logs: string[] = [];
+  let ffmpeg: FFmpeg;
+
+  logMp4("Preparing deterministic MP4 frame-sequence export", {
+    selectedFps: normalizedFps,
+    duration,
+    expectedDuration,
+    expectedFrameCount: frameCount,
+    outputWidth: width,
+    outputHeight: height,
+    exportScale,
+    quality,
+    bitrateTarget,
+    crf,
+    preset,
+    outputPattern: "frame_%06d.png"
+  });
+
+  if (signal?.aborted) {
+    throw createAbortError();
+  }
+
+  try {
+    ffmpeg = await getFfmpeg(signal, onStatus);
+  } catch (error) {
+    if (signal?.aborted) {
+      throw createAbortError();
+    }
+    const detail = error instanceof Error ? error.message : String(error);
+    if (detail.includes("local server")) {
+      throw new Error(detail);
+    }
+    console.error("[ASCII Studio MP4] Encoder load failed", error);
+    throw new Error(`MP4 conversion failed. ${detail} ${mp4EnvironmentFallback}`);
+  }
+
+  let aborted = false;
+  const handleAbort = () => {
+    aborted = true;
+    sharedFfmpeg?.terminate();
+    sharedFfmpeg = null;
+    sharedLoadPromise = null;
+  };
+  signal?.addEventListener("abort", handleAbort, { once: true });
+
+  const handleProgress = ({ progress }: { progress: number }) => {
+    if (Number.isFinite(progress)) {
+      onProgress?.(0.7 + Math.min(0.28, Math.max(0, progress) * 0.28));
+    }
+  };
+  const handleLog = ({ type, message }: { type: string; message: string }) => {
+    const line = `[${type}] ${message}`;
+    logs.push(line);
+    if (/error|failed|invalid|unable|not found|unknown|denied/i.test(message)) {
+      onStatus?.(`FFmpeg ${message}`);
+    }
+  };
+
+  ffmpeg.on("progress", handleProgress);
+  ffmpeg.on("log", handleLog);
+
+  try {
+    await clearPreviousFfmpegVideoFiles(ffmpeg);
+    logMp4("Cleared previous FFmpeg virtual export files", { outputName });
+
+    onStatus?.("Writing frames to encoder");
+    let paddedFrame: ReturnType<typeof createPaddedFrameCanvas> | null = null;
+    let writtenFrameCount = 0;
+    for await (const frame of frames) {
+      if (signal?.aborted) {
+        throw createAbortError();
+      }
+      const frameNumber = writtenFrameCount + 1;
+      if (frame.totalFrames !== frameCount) {
+        throw new Error(`MP4 frame sequence expected ${frameCount} frames but renderer reported ${frame.totalFrames}.`);
+      }
+      const sourceCanvas = frame.canvas;
+      if (sourceCanvas.width > width || sourceCanvas.height > height) {
+        throw new Error(`MP4 frame ${frameNumber} is larger than the expected ${width} x ${height} output.`);
+      }
+
+      let frameCanvas = sourceCanvas;
+      if (sourceCanvas.width !== width || sourceCanvas.height !== height) {
+        paddedFrame ??= createPaddedFrameCanvas(width, height);
+        paddedFrame.ctx.clearRect(0, 0, width, height);
+        paddedFrame.ctx.drawImage(sourceCanvas, 0, 0);
+        frameCanvas = paddedFrame.canvas;
+      }
+
+      const frameName = buildFrameFileName(writtenFrameCount);
+      const pngBlob = await canvasToPngBlob(frameCanvas, signal);
+      await withTimeout(
+        ffmpeg.writeFile(frameName, await fetchFile(pngBlob), { signal }),
+        ffmpegReadTimeoutMs,
+        `Writing MP4 frame ${frameNumber}`
+      );
+      writtenFrameNames.push(frameName);
+      writtenFrameCount = frameNumber;
+      onProgress?.(Math.min(0.68, (writtenFrameCount / frameCount) * 0.68));
+    }
+
+    if (writtenFrameCount !== frameCount) {
+      throw new Error(`MP4 frame sequence wrote ${writtenFrameCount} frames, expected ${frameCount}.`);
+    }
+
+    onStatus?.("Encoding MP4");
+    const ffmpegArgs = [
+      "-framerate",
+      String(normalizedFps),
+      "-start_number",
+      "1",
+      "-i",
+      "frame_%06d.png",
+      "-frames:v",
+      String(frameCount),
+      "-r",
+      String(normalizedFps),
+      "-an",
+      "-c:v",
+      "libx264",
+      "-preset",
+      preset,
+      "-crf",
+      String(crf),
+      "-maxrate",
+      maxrate,
+      "-bufsize",
+      bufsize,
+      "-pix_fmt",
+      "yuv420p",
+      "-movflags",
+      "+faststart",
+      outputName
+    ];
+    logMp4("Starting deterministic FFmpeg MP4 encode", {
+      outputName,
+      args: ffmpegArgs,
+      selectedFps: normalizedFps,
+      duration,
+      expectedDuration,
+      expectedFrameCount: frameCount,
+      outputWidth: width,
+      outputHeight: height,
+      exportScale,
+      bitrateTarget,
+      crf,
+      preset,
+      quality
+    });
+    const exitCode = await withTimeout(
+      ffmpeg.exec(ffmpegArgs, ffmpegExecTimeoutMs, { signal }),
+      ffmpegExecTimeoutMs + 5_000,
+      "Encoding MP4",
+      () => {
+        sharedFfmpeg?.terminate();
+        sharedFfmpeg = null;
+        sharedLoadPromise = null;
+      }
+    );
+    if (exitCode !== 0) {
+      throw new Error(`FFmpeg exited with code ${exitCode}.${summarizeLogs(logs)}`);
+    }
+
+    const encodedFrameCount = parseLastEncodedFrameCount(logs);
+    logMp4("FFmpeg deterministic MP4 encode finished", {
+      outputName,
+      exitCode,
+      selectedFps: normalizedFps,
+      expectedFrameCount: frameCount,
+      actualEncodedFrameCount: encodedFrameCount ?? "not detected",
+      expectedDuration,
+      outputWidth: width,
+      outputHeight: height,
+      exportScale,
+      bitrateTarget,
+      crf,
+      preset
+    });
+
+    onStatus?.("Finalizing file");
+    logMp4("Reading MP4 output", { outputName });
+    const output = await withTimeout(ffmpeg.readFile(outputName, undefined, { signal }), ffmpegReadTimeoutMs, "Reading MP4 output");
+    if (typeof output === "string" || !output.byteLength) {
+      throw new Error(`MP4 conversion produced no video data.${summarizeLogs(logs)}`);
+    }
+
+    const bytes = new Uint8Array(output.byteLength);
+    bytes.set(output);
+    validateMp4Bytes(bytes);
+    const mp4Blob = new Blob([bytes.buffer], { type: "video/mp4" });
+    if (mp4Blob.size <= 0 || mp4Blob.type !== "video/mp4") {
+      throw new Error("MP4 conversion produced an invalid MP4 blob.");
+    }
+    onProgress?.(0.99);
+    logMp4("Expected MP4", {
+      expectedFrameCount: frameCount,
+      actualEncodedFrameCount: encodedFrameCount ?? "not detected",
+      selectedFps: normalizedFps,
+      expectedDuration,
+      outputWidth: width,
+      outputHeight: height,
+      exportScale,
+      mp4BlobSize: mp4Blob.size,
+      mp4MimeType: mp4Blob.type
+    });
+    return {
+      blob: mp4Blob,
+      actualEncodedFrameCount: encodedFrameCount
+    };
+  } catch (error) {
+    if (aborted || signal?.aborted) {
+      throw createAbortError();
+    }
+    const detail = error instanceof Error ? error.message : "Unknown FFmpeg error.";
+    console.error("[ASCII Studio MP4] Deterministic encode failed", { detail, logs });
+    throw new Error(`MP4 conversion failed. ${detail}${summarizeLogs(logs)} ${mp4EnvironmentFallback}`);
+  } finally {
+    ffmpeg.off("progress", handleProgress);
+    ffmpeg.off("log", handleLog);
+    signal?.removeEventListener("abort", handleAbort);
+    await Promise.all(
+      writtenFrameNames.map(async (frameName) => {
+        try {
+          await ffmpeg.deleteFile(frameName);
+        } catch {
+          // Ignore virtual FS cleanup misses after cancellation or failed conversion.
+        }
+      })
+    );
+    try {
+      await ffmpeg.deleteFile(outputName);
+    } catch {
+      // Ignore virtual FS cleanup misses after cancellation or failed conversion.
+    }
+    try {
+      await clearPreviousFfmpegVideoFiles(ffmpeg);
+    } catch {
+      // Ignore broad cleanup failures from a terminated or unavailable virtual FS.
+    }
+  }
 };
 
 export const convertWebMToMp4 = async ({

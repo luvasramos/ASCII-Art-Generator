@@ -50,6 +50,7 @@ export interface RenderAsciiAnimationFramesOptions {
   animation?: AnimationSettings;
   renderLikePreview?: boolean;
   signal?: AbortSignal;
+  onFrameStart?: (frameIndex: number, totalFrames: number) => void;
   getFrame: (timeSeconds: number, progress: number, frameIndex: number, totalFrames: number) => ImageData | Promise<ImageData>;
 }
 
@@ -93,6 +94,7 @@ export async function* renderAsciiAnimationFrames({
   animation,
   renderLikePreview = false,
   signal,
+  onFrameStart,
   getFrame
 }: RenderAsciiAnimationFramesOptions): AsyncGenerator<RenderedAnimationFrame> {
   const normalizedFps = Math.max(1, Math.min(60, Math.round(fps)));
@@ -218,6 +220,7 @@ export async function* renderAsciiAnimationFrames({
 
   for (let frameIndex = 0; frameIndex < totalFrames; frameIndex += 1) {
     throwIfAborted(signal);
+    onFrameStart?.(frameIndex, totalFrames);
     const timestamp = frameIndex / normalizedFps;
     const progress = frameIndex / totalFrames;
     renderFrame(frameIndex === 0 ? firstFrame : await getFrame(timestamp, progress, frameIndex, totalFrames), timestamp);

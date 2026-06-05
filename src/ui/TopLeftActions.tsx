@@ -8,7 +8,7 @@ import {
   resolveAnimatedExportFps,
   resolveAnimatedExportProfile
 } from "../export/exportQuality";
-import { defaultExportOptions, defaultExportScale } from "../state/defaults";
+import { defaultExportOptions } from "../state/defaults";
 import { useStudioStore } from "../state/useStudioStore";
 import type { AnimatedExportQuality, AnimationType, RenderGrid } from "../renderer/types";
 import { CommandButton, Select, Slider, Toggle } from "./controls";
@@ -48,6 +48,12 @@ const exportFileTypeOptions: Array<{ value: ExportFileType; label: string }> = [
   { value: "webm", label: "WebM" },
   { value: "mp4", label: "MP4" },
   { value: "gif", label: "GIF" }
+];
+
+const videoScaleOptions = [
+  { value: "1", label: "1x" },
+  { value: "2", label: "2x" },
+  { value: "4", label: "4x" }
 ];
 
 export const TopLeftActions = ({
@@ -102,8 +108,14 @@ export const TopLeftActions = ({
     (selectedAnimatedVideoExport && !animatedExportAvailable) ||
     (selectedGifExport && !showAnimationExports);
   const outputScale = fileType === "svg" ? 1 : exportScale;
-  const outputWidth = grid ? Math.max(1, Math.round(grid.width * outputScale)) : null;
-  const outputHeight = grid ? Math.max(1, Math.round(grid.height * outputScale)) : null;
+  const canvasWidth = grid ? Math.max(1, Math.round(grid.width)) : null;
+  const canvasHeight = grid ? Math.max(1, Math.round(grid.height)) : null;
+  const rawOutputWidth = canvasWidth ? Math.max(1, Math.round(canvasWidth * outputScale)) : null;
+  const rawOutputHeight = canvasHeight ? Math.max(1, Math.round(canvasHeight * outputScale)) : null;
+  const outputWidth =
+    rawOutputWidth && selectedAnimatedVideoExport ? rawOutputWidth + (rawOutputWidth % 2) : rawOutputWidth;
+  const outputHeight =
+    rawOutputHeight && selectedAnimatedVideoExport ? rawOutputHeight + (rawOutputHeight % 2) : rawOutputHeight;
   const selectedEstimate =
     animatedEstimate && fileType === "mp4"
       ? animatedEstimate.mp4Bytes
@@ -239,7 +251,7 @@ export const TopLeftActions = ({
               <div className="text-sm font-semibold text-zinc-100">Export</div>
               <div className="mt-0.5 text-xs text-zinc-500">Choose a file type</div>
             </div>
-            <div className="text-xs tabular-nums text-zinc-500">{exportScale}x</div>
+            <div className="text-xs tabular-nums text-zinc-500">Scale {exportScale}x</div>
           </div>
 
           <div className="flex items-end gap-2">
@@ -302,17 +314,24 @@ export const TopLeftActions = ({
                 <span className="tabular-nums text-zinc-300">{fileType.toUpperCase()}</span>
               </div>
               <div className="flex items-center justify-between gap-3">
-                <span>Output size</span>
+                <span>Canvas</span>
+                <span className="tabular-nums text-zinc-300">
+                  {canvasWidth && canvasHeight ? `${canvasWidth} x ${canvasHeight} px` : "No render"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span>Export scale</span>
+                <span className="tabular-nums text-zinc-300">{outputScale}x</span>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span>Output</span>
                 <span className="tabular-nums text-zinc-300">
                   {outputWidth && outputHeight ? `${outputWidth} x ${outputHeight} px` : "No render"}
                 </span>
               </div>
-              {fileType === "png" && (
-                <div className="flex items-center justify-between gap-3">
-                  <span>Export scale</span>
-                  <span className="tabular-nums text-zinc-300">{exportScale}x</span>
-                </div>
-              )}
+              <div className="border-t border-white/[0.05] pt-1 text-zinc-500">
+                Output size = Canvas size x Export scale
+              </div>
             </div>
           )}
 
@@ -323,6 +342,12 @@ export const TopLeftActions = ({
 
           {showAnimatedControls && (
             <div className="space-y-3">
+              <Select
+                label="Video Scale"
+                value={String(exportScale)}
+                options={videoScaleOptions}
+                onChange={(value) => updateExportScale(Number(value))}
+              />
               <Select
                 label="Video Quality"
                 value={exportOptions.animatedExportQuality}
@@ -335,10 +360,23 @@ export const TopLeftActions = ({
                   <span className="tabular-nums text-zinc-300">{fileType.toUpperCase()}</span>
                 </div>
                 <div className="flex items-center justify-between gap-3">
-                  <span>Output size</span>
+                  <span>Canvas</span>
+                  <span className="tabular-nums text-zinc-300">
+                    {canvasWidth && canvasHeight ? `${canvasWidth} x ${canvasHeight} px` : "No render"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span>Video scale</span>
+                  <span className="tabular-nums text-zinc-300">{exportScale}x</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span>Output</span>
                   <span className="tabular-nums text-zinc-300">
                     {outputWidth && outputHeight ? `${outputWidth} x ${outputHeight} px` : "No render"}
                   </span>
+                </div>
+                <div className="border-t border-white/[0.05] pt-1 text-zinc-500">
+                  Output size = Canvas size x Export scale
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <span>FPS</span>
@@ -393,15 +431,11 @@ export const TopLeftActions = ({
 
           {showPngControls && (
             <>
-              <Slider
+              <Select
                 label="PNG scale"
-                value={exportScale}
-                min={1}
-                max={4}
-                step={1}
-                unit="x"
-                resetValue={defaultExportScale}
-                onChange={updateExportScale}
+                value={String(exportScale)}
+                options={videoScaleOptions}
+                onChange={(value) => updateExportScale(Number(value))}
               />
               <Toggle
                 label="Transparent Background"

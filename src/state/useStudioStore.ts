@@ -396,7 +396,16 @@ const normalizeExportOptions = (options?: Partial<ExportOptions>): ExportOptions
   animatedExportQuality: normalizeAnimatedExportQuality(options?.animatedExportQuality)
 });
 
-const normalizeExportScale = (exportScale?: number) => clamp(exportScale ?? defaultExportScale, 1, 4);
+const normalizeExportScale = (exportScale?: number) => {
+  const scale = clamp(exportScale ?? defaultExportScale, 1, 4);
+  if (scale >= 3) {
+    return 4;
+  }
+  if (scale >= 1.5) {
+    return 2;
+  }
+  return 1;
+};
 
 const enforceDuotoneBackgroundOpacity = (ascii: AsciiSettings, color: ColorSettings): AsciiSettings =>
   color.paletteMode === "single" && ascii.backgroundOpacity !== 0
