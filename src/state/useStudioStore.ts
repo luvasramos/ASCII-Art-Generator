@@ -14,7 +14,20 @@ import {
   defaultImageSettings
 } from "./defaults";
 import { normalizePreviewFps } from "../renderer/animationTiming";
+import {
+  clearRenderedPreviewCacheState,
+  createRenderedPreviewState,
+  markRenderedPreviewStateStale,
+  normalizeRenderedPreviewQuality,
+  normalizeRenderedPreviewState,
+  type RenderedPreviewPlaybackFrameUpdate,
+  type RenderedPreviewPlaybackStart,
+  type RenderedPreviewProgressUpdate,
+  type RenderedPreviewRenderFinish,
+  type RenderedPreviewRenderStart
+} from "../renderer/renderedPreviewModel";
 import type {
+  AnimationPreviewMode,
   AnimationSettings,
   AspectRatioId,
   AsciiSettings,
@@ -26,6 +39,8 @@ import type {
   FrameSettings,
   ImageGlyphRecord,
   ImageSettings,
+  RenderedPreviewQuality,
+  RenderedPreviewState,
   SettingsPreset,
   StudioSettingsSnapshot,
   UploadedFontRecord
@@ -40,6 +55,7 @@ interface StudioStore {
   frame: FrameSettings;
   breakup: BreakupSettings;
   animation: AnimationSettings;
+  renderedPreview: RenderedPreviewState;
   color: ColorSettings;
   exportOptions: ExportOptions;
   exportScale: number;
@@ -57,6 +73,21 @@ interface StudioStore {
   updateFrame: (patch: Partial<FrameSettings>) => void;
   updateBreakup: (patch: Partial<BreakupSettings>) => void;
   updateAnimation: (patch: Partial<AnimationSettings>) => void;
+  setAnimationPreviewMode: (mode: AnimationPreviewMode) => void;
+  setRenderedPreviewQuality: (quality: RenderedPreviewQuality) => void;
+  updateRenderedPreviewState: (patch: Partial<RenderedPreviewState>) => void;
+  startRenderedPreviewRender: (render: RenderedPreviewRenderStart) => void;
+  updateRenderedPreviewProgress: (progress: RenderedPreviewProgressUpdate) => void;
+  finishRenderedPreviewRender: (render: RenderedPreviewRenderFinish) => void;
+  cancelRenderedPreviewRender: (cancelRequestId?: string | null) => void;
+  failRenderedPreviewRender: (error: string) => void;
+  startRenderedPreviewPlayback: (playback: RenderedPreviewPlaybackStart) => void;
+  pauseRenderedPreviewPlayback: () => void;
+  stopRenderedPreviewPlayback: () => void;
+  updateRenderedPreviewPlaybackFrame: (frame: RenderedPreviewPlaybackFrameUpdate) => void;
+  failRenderedPreviewPlayback: (error: string) => void;
+  markRenderedPreviewStale: () => void;
+  clearRenderedPreviewCache: () => void;
   updateColor: (patch: Partial<ColorSettings>) => void;
   setSourcePalette: (sourcePalette: string[]) => void;
   updateExportOptions: (patch: Partial<ExportOptions>) => void;
@@ -380,6 +411,9 @@ const normalizeAnimation = (
     direction?: string;
     scaleMovement?: string;
     matrixLoopStyle?: string;
+    matrixTransitionColorEnabled?: unknown;
+    matrixTransitionColor?: unknown;
+    matrixTransitionAmount?: unknown;
     spinDirection?: string;
     ambientDirection?: string;
     echoFadeCurve?: string;
@@ -408,6 +442,16 @@ const normalizeAnimation = (
     scaleMax: Math.max(scaleMin, scaleMax),
     scaleMovement: animation?.scaleMovement === "constant" ? "constant" : "ease",
     matrixLoopStyle: animation?.matrixLoopStyle === "continuous" ? "continuous" : "pingpong",
+    matrixTransitionColorEnabled: asBoolean(
+      animation?.matrixTransitionColorEnabled,
+      defaultAnimationSettings.matrixTransitionColorEnabled
+    ),
+    matrixTransitionColor: asHexColor(animation?.matrixTransitionColor, defaultAnimationSettings.matrixTransitionColor),
+    matrixTransitionAmount: clamp(
+      asNumber(animation?.matrixTransitionAmount, defaultAnimationSettings.matrixTransitionAmount),
+      0,
+      100
+    ),
     spinDirection: animation?.spinDirection === "counterclockwise" ? "counterclockwise" : "clockwise",
     ambientDirection:
       animation?.ambientDirection === "vertical" ||
@@ -597,6 +641,7 @@ const applyHistorySnapshot = (snapshot: StudioHistorySnapshot) => ({
 
 const withUndo = (state: StudioStore, patch: Partial<StudioStore>): Partial<StudioStore> => ({
   // Store compact snapshots before meaningful changes so controls, presets, and restorable image data can travel together.
+  renderedPreview: markRenderedPreviewStateStale(state.renderedPreview),
   ...patch,
   undoStack: [...state.undoStack, createHistorySnapshot(state)].slice(-80),
   redoStack: []
@@ -661,6 +706,7 @@ export const useStudioStore = create<StudioStore>()(
       frame: defaultFrameSettings,
       breakup: defaultBreakupSettings,
       animation: defaultAnimationSettings,
+      renderedPreview: createRenderedPreviewState(defaultAnimationSettings.fps),
       color: defaultColorSettings,
       exportOptions: defaultExportOptions,
       exportScale: defaultExportScale,
@@ -688,6 +734,235 @@ export const useStudioStore = create<StudioStore>()(
       updateFrame: (patch) => set((state) => withUndo(state, { frame: normalizeFrame({ ...state.frame, ...patch }) })),
       updateBreakup: (patch) => set((state) => withUndo(state, { breakup: { ...state.breakup, ...patch } })),
       updateAnimation: (patch) => set((state) => withUndo(state, { animation: normalizeAnimation({ ...state.animation, ...patch }) })),
+      setAnimationPreviewMode: (mode) =>
+        set((state) => ({
+          renderedPreview: normalizeRenderedPreviewState(
+            {
+              ...state.renderedPreview,
+              mode
+            },
+            state.animation.fps
+          )
+        })),
+      setRenderedPreviewQuality: (quality) =>
+        set((state) => ({
+          renderedPreview: markRenderedPreviewStateStale(
+            normalizeRenderedPreviewState(
+              {
+                ...state.renderedPreview,
+                quality: normalizeRenderedPreviewQuality(quality)
+              },
+              state.animation.fps
+            )
+          )
+        })),
+      updateRenderedPreviewState: (patch) =>
+        set((state) => ({
+          renderedPreview: normalizeRenderedPreviewState(
+            {
+              ...state.renderedPreview,
+              ...patch
+            },
+            state.animation.fps
+          )
+        })),
+      startRenderedPreviewRender: (render) =>
+        set((state) => ({
+          renderedPreview: normalizeRenderedPreviewState(
+            {
+              ...state.renderedPreview,
+              mode: "rendered",
+              status: "rendering",
+              fps: render.fps,
+              frameCount: render.frameCount,
+              currentFrame: 0,
+              progress: 0,
+              cacheKey: render.cacheKey,
+              quality: render.quality,
+              cancelRequestId: render.cancelRequestId,
+              error: null
+            },
+            state.animation.fps
+          )
+        })),
+      updateRenderedPreviewProgress: (progress) =>
+        set((state) => {
+          if (
+            state.renderedPreview.status !== "rendering" ||
+            state.renderedPreview.cacheKey !== progress.cacheKey
+          ) {
+            return state;
+          }
+          return {
+            renderedPreview: normalizeRenderedPreviewState(
+              {
+                ...state.renderedPreview,
+                currentFrame: progress.currentFrame,
+                progress: progress.progress
+              },
+              state.animation.fps
+            )
+          };
+        }),
+      finishRenderedPreviewRender: (render) =>
+        set((state) => {
+          if (
+            state.renderedPreview.status !== "rendering" ||
+            state.renderedPreview.cacheKey !== render.cacheKey
+          ) {
+            return {
+              renderedPreview: markRenderedPreviewStateStale(state.renderedPreview)
+            };
+          }
+          return {
+            renderedPreview: normalizeRenderedPreviewState(
+              {
+                ...state.renderedPreview,
+                status: "ready",
+                fps: render.fps,
+                frameCount: render.frameCount,
+                currentFrame: 0,
+                progress: 1,
+                quality: render.quality,
+                cancelRequestId: null,
+                error: null
+              },
+              state.animation.fps
+            )
+          };
+        }),
+      cancelRenderedPreviewRender: (cancelRequestId) =>
+        set((state) => {
+          if (
+            cancelRequestId &&
+            state.renderedPreview.cancelRequestId &&
+            state.renderedPreview.cancelRequestId !== cancelRequestId
+          ) {
+            return state;
+          }
+          return {
+            renderedPreview: {
+              ...clearRenderedPreviewCacheState(state.renderedPreview, state.animation.fps),
+              mode: state.renderedPreview.mode
+            }
+          };
+        }),
+      failRenderedPreviewRender: (error) =>
+        set((state) => ({
+          renderedPreview: normalizeRenderedPreviewState(
+            {
+              ...clearRenderedPreviewCacheState(state.renderedPreview, state.animation.fps),
+              mode: "rendered",
+              status: "error",
+              error
+            },
+            state.animation.fps
+          )
+        })),
+      startRenderedPreviewPlayback: (playback) =>
+        set((state) => {
+          const playbackFrameCount = Math.max(1, Math.round(playback.frameCount));
+          const currentFrame = clamp(
+            Math.round(playback.currentFrame ?? state.renderedPreview.currentFrame),
+            0,
+            Math.max(0, playbackFrameCount - 1)
+          );
+          if (
+            state.renderedPreview.status === "error" ||
+            state.renderedPreview.status === "rendering" ||
+            state.renderedPreview.status === "stale" ||
+            state.renderedPreview.cacheKey !== playback.cacheKey
+          ) {
+            return state;
+          }
+          return {
+            renderedPreview: normalizeRenderedPreviewState(
+              {
+                ...state.renderedPreview,
+                mode: "rendered",
+                status: "playing",
+                fps: playback.fps,
+                frameCount: playback.frameCount,
+                currentFrame,
+                progress: 1,
+                cancelRequestId: null,
+                error: null
+              },
+              state.animation.fps
+            )
+          };
+        }),
+      pauseRenderedPreviewPlayback: () =>
+        set((state) => {
+          if (state.renderedPreview.status !== "playing") {
+            return state;
+          }
+          return {
+            renderedPreview: normalizeRenderedPreviewState(
+              {
+                ...state.renderedPreview,
+                status: "paused"
+              },
+              state.animation.fps
+            )
+          };
+        }),
+      stopRenderedPreviewPlayback: () =>
+        set((state) => {
+          if (state.renderedPreview.status !== "playing" && state.renderedPreview.status !== "paused") {
+            return state;
+          }
+          return {
+            renderedPreview: normalizeRenderedPreviewState(
+              {
+                ...state.renderedPreview,
+                status: "ready"
+              },
+              state.animation.fps
+            )
+          };
+        }),
+      updateRenderedPreviewPlaybackFrame: (frame) =>
+        set((state) => {
+          if (
+            (state.renderedPreview.status !== "playing" &&
+              state.renderedPreview.status !== "paused" &&
+              state.renderedPreview.status !== "ready") ||
+            state.renderedPreview.cacheKey !== frame.cacheKey
+          ) {
+            return state;
+          }
+          return {
+            renderedPreview: normalizeRenderedPreviewState(
+              {
+                ...state.renderedPreview,
+                currentFrame: frame.currentFrame
+              },
+              state.animation.fps
+            )
+          };
+        }),
+      failRenderedPreviewPlayback: (error) =>
+        set((state) => ({
+          renderedPreview: normalizeRenderedPreviewState(
+            {
+              ...state.renderedPreview,
+              mode: "rendered",
+              status: "error",
+              cancelRequestId: null,
+              error
+            },
+            state.animation.fps
+          )
+        })),
+      markRenderedPreviewStale: () =>
+        set((state) => ({
+          renderedPreview: markRenderedPreviewStateStale(state.renderedPreview)
+        })),
+      clearRenderedPreviewCache: () =>
+        set((state) => ({
+          renderedPreview: clearRenderedPreviewCacheState(state.renderedPreview, state.animation.fps)
+        })),
       updateColor: (patch) =>
         set((state) => {
           const color = normalizeColor({ ...state.color, ...patch });
@@ -695,7 +970,8 @@ export const useStudioStore = create<StudioStore>()(
         }),
       setSourcePalette: (sourcePalette) =>
         set((state) => ({
-          color: normalizeColor({ ...state.color, sourcePaletteOriginal: sourcePalette, sourcePalette })
+          color: normalizeColor({ ...state.color, sourcePaletteOriginal: sourcePalette, sourcePalette }),
+          renderedPreview: markRenderedPreviewStateStale(state.renderedPreview)
         })),
       updateExportOptions: (patch) =>
         set((state) => withUndo(state, { exportOptions: { ...state.exportOptions, ...patch } })),
@@ -722,7 +998,8 @@ export const useStudioStore = create<StudioStore>()(
             ...state.ascii,
             selectedPresetId: preset.id,
             charset: characters
-          }
+          },
+          renderedPreview: markRenderedPreviewStateStale(state.renderedPreview)
         }));
       },
       removeCharacterPreset: (id) =>
@@ -766,7 +1043,8 @@ export const useStudioStore = create<StudioStore>()(
             undoStack: [...state.undoStack, createHistorySnapshot(state)].slice(-80),
             redoStack: [],
             ...applySnapshotPatch(preset.settings),
-            activeSettingsPresetId: preset.id
+            activeSettingsPresetId: preset.id,
+            renderedPreview: markRenderedPreviewStateStale(state.renderedPreview)
           };
         }),
       importSettingsPreset: (name, settings) =>
@@ -782,7 +1060,8 @@ export const useStudioStore = create<StudioStore>()(
             redoStack: [],
             ...applySnapshotPatch(preset.settings),
             settingsPresets: [...state.settingsPresets, preset],
-            activeSettingsPresetId: preset.id
+            activeSettingsPresetId: preset.id,
+            renderedPreview: markRenderedPreviewStateStale(state.renderedPreview)
           };
         }),
       removeSettingsPreset: (id) =>
@@ -820,7 +1099,8 @@ export const useStudioStore = create<StudioStore>()(
             ...applyHistorySnapshot(previous),
             undoStack: state.undoStack.slice(0, -1),
             redoStack: [...state.redoStack, createHistorySnapshot(state)].slice(-80),
-            activeSettingsPresetId: null
+            activeSettingsPresetId: null,
+            renderedPreview: markRenderedPreviewStateStale(state.renderedPreview)
           };
         }),
       redo: () =>
@@ -833,7 +1113,8 @@ export const useStudioStore = create<StudioStore>()(
             ...applyHistorySnapshot(next),
             undoStack: [...state.undoStack, createHistorySnapshot(state)].slice(-80),
             redoStack: state.redoStack.slice(0, -1),
-            activeSettingsPresetId: null
+            activeSettingsPresetId: null,
+            renderedPreview: markRenderedPreviewStateStale(state.renderedPreview)
           };
         }),
       resetProcessing: () =>
@@ -844,6 +1125,7 @@ export const useStudioStore = create<StudioStore>()(
           frame: defaultFrameSettings,
           breakup: defaultBreakupSettings,
           animation: defaultAnimationSettings,
+          renderedPreview: createRenderedPreviewState(defaultAnimationSettings.fps),
           color: defaultColorSettings,
           exportOptions: defaultExportOptions,
           exportScale: defaultExportScale,
@@ -877,6 +1159,7 @@ export const useStudioStore = create<StudioStore>()(
         frame: state.frame,
         breakup: state.breakup,
         animation: state.animation,
+        renderedPreview: createRenderedPreviewState(state.animation.fps, state.renderedPreview.quality),
         color: state.color,
         exportOptions: state.exportOptions,
         exportScale: state.exportScale,
@@ -911,6 +1194,7 @@ export const useStudioStore = create<StudioStore>()(
           frame: normalizeFrame(value?.frame),
           breakup: normalizeBreakup(value?.breakup),
           animation: normalizeAnimation(value?.animation),
+          renderedPreview: normalizeRenderedPreviewState(value?.renderedPreview, defaultAnimationSettings.fps),
           color,
           lastNonDuotoneBackgroundOpacity,
           exportOptions: normalizeExportOptions(value?.exportOptions),

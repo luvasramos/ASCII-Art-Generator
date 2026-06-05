@@ -136,6 +136,38 @@ const matrixProgress = (progress: number, speed: number) => {
 
 const matrixChancePulse = (fraction: number) => Math.sin(clamp01(fraction) * Math.PI);
 
+const matrixTransitionStrength = (
+  cell: CellRenderData,
+  animation: AnimationSettings,
+  controls: MatrixGlyphControls,
+  slot: number,
+  secondarySlot: number,
+  fraction: number
+) => {
+  if (!animation.matrixTransitionColorEnabled) {
+    return 0;
+  }
+  const amount = clamp01(animation.matrixTransitionAmount / 100);
+  if (amount <= 0) {
+    return 0;
+  }
+  const selected = hash(cell.x, cell.y, slot * 29 + secondarySlot * 43 + 509 + controls.salt);
+  if (selected > amount) {
+    return 0;
+  }
+  const pulse = matrixChancePulse(fraction);
+  const variation = 0.78 + hash(cell.x, cell.y, slot * 37 + secondarySlot * 17 + 613 + controls.salt) * 0.22;
+  return (0.16 + pulse * 0.26) * variation;
+};
+
+const withMatrixTransition = (cell: CellRenderData, strength: number): CellRenderData =>
+  strength > 0
+    ? {
+        ...cell,
+        matrixTransition: Math.max(cell.matrixTransition ?? 0, strength)
+      }
+    : cell;
+
 const applyFadeIntensity = (
   grid: RenderGrid,
   ascii: AsciiSettings,
@@ -313,10 +345,14 @@ const applyMatrixGlyphs = (
             : -1
           : randomOffset;
       const nextIndex = Math.min(glyphCount - 1, Math.max(0, baseIndex + fallbackOffset));
-      return {
-        ...cell,
-        foreground: glyphCount > 1 ? nextIndex / (glyphCount - 1) : cell.foreground
-      };
+      const nextForeground = glyphCount > 1 ? nextIndex / (glyphCount - 1) : cell.foreground;
+      return withMatrixTransition(
+        {
+          ...cell,
+          foreground: nextForeground
+        },
+        nextIndex !== baseIndex ? matrixTransitionStrength(cell, animation, controls, slot, secondarySlot, fraction) : 0
+      );
     });
 
     return {
@@ -366,10 +402,14 @@ const applyMatrixGlyphs = (
       currentIndex >= 0
         ? Math.min(characters.length - 1, Math.max(0, currentIndex + randomOffset))
         : fallbackIndex;
-    return {
-      ...cell,
-      glyph: characters[index] ?? cell.glyph
-    };
+    const nextGlyph = characters[index] ?? cell.glyph;
+    return withMatrixTransition(
+      {
+        ...cell,
+        glyph: nextGlyph
+      },
+      nextGlyph !== cell.glyph ? matrixTransitionStrength(cell, animation, controls, slot, secondarySlot, fraction) : 0
+    );
   });
   return {
     ...grid,

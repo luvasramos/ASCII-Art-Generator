@@ -1,4 +1,13 @@
-import type { AsciiSettings, ColorSettings, ExportOptions, FontSettings, GlyphMetric, RenderGrid } from "./types";
+import type {
+  AnimationSettings,
+  AsciiSettings,
+  CellRenderData,
+  ColorSettings,
+  ExportOptions,
+  FontSettings,
+  GlyphMetric,
+  RenderGrid
+} from "./types";
 import type { GlyphAtlas } from "../atlas/glyphAtlas";
 import { getImageGlyphIndexForBrightness, type ImageGlyphAtlas } from "../atlas/imageGlyphAtlas";
 import {
@@ -8,7 +17,6 @@ import {
   resolveDisplayCellColor,
   resolveDisplaySourceMatchColor
 } from "../quantization/color";
-import type { AnimationSettings } from "./types";
 import { resolveRenderAnimationState } from "./animationEffects";
 import type { ImageGlyphAtlasEntry } from "../atlas/imageGlyphAtlas";
 import { createImageGlyphBrightnessMapper } from "./imageGlyphDistribution";
@@ -40,6 +48,8 @@ const prepareCanvas = (canvas: HTMLCanvasElement, width: number, height: number)
 };
 
 const quantizeBrightness = (value: number) => Math.round(Math.min(1, Math.max(0, value)) * 255) / 255;
+
+const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
 
 const clampByte = (value: number) => Math.min(255, Math.max(0, Math.round(value)));
 
@@ -167,6 +177,37 @@ const scaleColorBrightness = (color: string, multiplier: number) => {
   }
 
   return color;
+};
+
+const blendCssColors = (baseColor: string, tintColor: string, amount: number) => {
+  const blend = clamp01(amount);
+  if (blend <= 0) {
+    return baseColor;
+  }
+  const base = parseCanvasColor(baseColor);
+  const tint = parseCanvasColor(tintColor);
+  return `rgb(${clampByte(base.r + (tint.r - base.r) * blend)}, ${clampByte(
+    base.g + (tint.g - base.g) * blend
+  )}, ${clampByte(base.b + (tint.b - base.b) * blend)})`;
+};
+
+const applyMatrixTransitionColor = (
+  baseColor: string,
+  cell: CellRenderData,
+  animation: AnimationSettings | undefined,
+  color: ColorSettings,
+  brightnessMultiplier: number,
+  duotoneMode: boolean
+) => {
+  const strength = clamp01(cell.matrixTransition ?? 0);
+  if (!animation?.matrixTransitionColorEnabled || animation.matrixTransitionAmount <= 0 || strength <= 0) {
+    return baseColor;
+  }
+  const transitionColor = color.invert ? invertCssColor(animation.matrixTransitionColor) : animation.matrixTransitionColor;
+  const displayTransition = duotoneMode
+    ? transitionColor
+    : scaleColorBrightness(transitionColor, brightnessMultiplier);
+  return blendCssColors(baseColor, displayTransition, Math.min(0.48, strength));
 };
 
 const drawImageCover = (
@@ -312,7 +353,17 @@ export const renderAsciiLayers = ({
       const resolvedGlyphColor = sourceMatchMode
         ? resolveDisplaySourceMatchColor(cell, color)
         : resolveDisplayCellColor(quantizeBrightness(cell.foreground), color, "foreground");
-      const glyphColor = duotoneMode ? resolvedGlyphColor : scaleColorBrightness(resolvedGlyphColor, animationState.brightnessMultiplier);
+      const baseGlyphColor = duotoneMode
+        ? resolvedGlyphColor
+        : scaleColorBrightness(resolvedGlyphColor, animationState.brightnessMultiplier);
+      const glyphColor = applyMatrixTransitionColor(
+        baseGlyphColor,
+        cell,
+        animation,
+        color,
+        animationState.brightnessMultiplier,
+        duotoneMode
+      );
       const tintedGlyph = getTintedImageGlyphCanvas(imageGlyph, glyphColor, duotoneMode);
       const drawWidth = grid.cellWidth * ascii.characterScale * animationState.glyphScaleMultiplier;
       const drawHeight = grid.cellHeight * ascii.characterScale * animationState.glyphScaleMultiplier;
@@ -327,7 +378,17 @@ export const renderAsciiLayers = ({
     const resolvedForeground = sourceMatchMode
       ? resolveDisplaySourceMatchColor(cell, color)
       : resolveDisplayCellColor(quantizeBrightness(cell.foreground), color, "foreground");
-    const fg = duotoneMode ? resolvedForeground : scaleColorBrightness(resolvedForeground, animationState.brightnessMultiplier);
+    const baseForeground = duotoneMode
+      ? resolvedForeground
+      : scaleColorBrightness(resolvedForeground, animationState.brightnessMultiplier);
+    const fg = applyMatrixTransitionColor(
+      baseForeground,
+      cell,
+      animation,
+      color,
+      animationState.brightnessMultiplier,
+      duotoneMode
+    );
     const glyph = atlas.getTintedGlyph(cell.glyph, fg);
     if (!glyph) {
       continue;

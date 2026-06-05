@@ -229,11 +229,11 @@ export const RightSidebar = ({
     animation,
     color,
     exportOptions,
-    exportScale,
-    presets,
-    settingsPresets,
-    activeSettingsPresetId,
-    uploadedFonts,
+  exportScale,
+  presets,
+  settingsPresets,
+  activeSettingsPresetId,
+  uploadedFonts,
     setCharacterPreset,
     saveCharacterPreset,
     removeCharacterPreset,
@@ -247,10 +247,10 @@ export const RightSidebar = ({
     updateFont,
     updateImage,
     updateBreakup,
-    updateColor,
-    removeUploadedFont,
-    resetProcessing
-  } = useStudioStore();
+  updateColor,
+  removeUploadedFont,
+  resetProcessing
+} = useStudioStore();
   const fontOptions = useMemo(
     () => [
       ...builtInFonts.map((family) => ({ value: family, label: family })),
@@ -343,6 +343,39 @@ export const RightSidebar = ({
         }[animation.type]
       : "disabled"
     : "Load a still image";
+  const renderMatrixTransitionControls = (disabled: boolean) => (
+    <>
+      <Toggle
+        disabled={disabled}
+        label="Transitional color"
+        checked={animation.matrixTransitionColorEnabled}
+        onChange={(matrixTransitionColorEnabled) => updateAnimation({ matrixTransitionColorEnabled })}
+      />
+      <div
+        className={`space-y-4 transition-opacity duration-150 ${
+          animation.matrixTransitionColorEnabled && !disabled ? "opacity-100" : "opacity-45"
+        }`}
+      >
+        <ColorInput
+          disabled={disabled || !animation.matrixTransitionColorEnabled}
+          label="Transition color"
+          value={animation.matrixTransitionColor}
+          onChange={(matrixTransitionColor) => updateAnimation({ matrixTransitionColor })}
+        />
+        <Slider
+          disabled={disabled || !animation.matrixTransitionColorEnabled}
+          label="Transition amount"
+          value={animation.matrixTransitionAmount}
+          min={0}
+          max={100}
+          step={1}
+          unit="%"
+          resetValue={defaultAnimationSettings.matrixTransitionAmount}
+          onChange={(matrixTransitionAmount) => updateAnimation({ matrixTransitionAmount })}
+        />
+      </div>
+    </>
+  );
   const selectedFrameLabel =
     frame.aspectRatio === "custom"
       ? `Custom ${frame.customCanvasWidth} x ${frame.customCanvasHeight}`
@@ -889,6 +922,7 @@ export const RightSidebar = ({
                   ]}
                   onChange={(matrixLoopStyle) => updateAnimation({ matrixLoopStyle: matrixLoopStyle as typeof animation.matrixLoopStyle })}
                 />
+                {renderMatrixTransitionControls(animationControlsDisabled)}
               </>
             )}
             {animation.type === "breakup" && (
@@ -976,38 +1010,6 @@ export const RightSidebar = ({
             )}
             <Slider disabled={animationControlsDisabled} label="Loop Duration" value={animation.loopDuration} min={1} max={12} step={0.5} unit=" sec" resetValue={defaultAnimationSettings.loopDuration} onChange={(loopDuration) => updateAnimation({ loopDuration })} />
             <Slider disabled={animationControlsDisabled} label="Animation FPS" value={animation.fps} min={1} max={60} step={1} unit=" fps" resetValue={defaultAnimationSettings.fps} onChange={(fps) => updateAnimation({ fps })} />
-            <Toggle
-              disabled={animationControlsDisabled}
-              label="True FPS Preview"
-              checked={animation.trueFpsPreview}
-              onChange={(trueFpsPreview) => updateAnimation({ trueFpsPreview })}
-            />
-            <Select
-              disabled={animationControlsDisabled}
-              label="Preview FPS"
-              value={String(animation.previewFps)}
-              options={[
-                { value: "12", label: "12 fps" },
-                { value: "24", label: "24 fps" },
-                { value: "30", label: "30 fps" },
-                { value: "60", label: "60 fps" }
-              ]}
-              onChange={(previewFps) => updateAnimation({ previewFps: Number(previewFps) })}
-            />
-            <Select
-              disabled={animationControlsDisabled}
-              label="Preview Resolution"
-              value={animation.previewResolution}
-              options={[
-                { value: "low", label: "Low" },
-                { value: "medium", label: "Medium" },
-                { value: "high", label: "High" },
-                { value: "full", label: "Full" }
-              ]}
-              onChange={(previewResolution) =>
-                updateAnimation({ previewResolution: previewResolution as typeof animation.previewResolution })
-              }
-            />
             <div className="rounded-xl border border-white/[0.06] bg-black/20">
               <button
                 type="button"
@@ -1090,6 +1092,8 @@ export const RightSidebar = ({
                       resetValue={defaultAnimationSettings.matrixOverlayRandomness}
                       onChange={(matrixOverlayRandomness) => updateAnimation({ matrixOverlayRandomness })}
                     />
+                    {animation.type !== "matrix" &&
+                      renderMatrixTransitionControls(animationControlsDisabled || !animation.matrixOverlayEnabled)}
                   </div>
                 </motion.div>
               )}

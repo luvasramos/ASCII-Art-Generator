@@ -186,6 +186,39 @@ const buildEchoBlendStops = (animation: AnimationSettings, desiredCount: number)
   return [...stops].sort((a, b) => a - b);
 };
 
+const buildMatrixTransitionPaletteStops = (
+  animation: AnimationSettings | undefined,
+  background: RgbColor,
+  foreground: RgbColor
+) => {
+  const matrixCanRender = animation?.type === "matrix" || animation?.matrixOverlayEnabled;
+  if (
+    !animation?.matrixTransitionColorEnabled ||
+    !matrixCanRender ||
+    animation.matrixTransitionAmount <= 0
+  ) {
+    return [];
+  }
+  const transition = hexToRgb(animation.matrixTransitionColor);
+  if (!transition) {
+    return [];
+  }
+  return [
+    interpolateColor([foreground, transition], 0.28),
+    interpolateColor([foreground, transition], 0.42),
+    interpolateColor([background, transition], 0.24),
+    transition
+  ];
+};
+
+const seedMatrixTransitionPalette = (palette: RgbColor[], transitionStops: RgbColor[]) => {
+  if (!transitionStops.length) {
+    return palette;
+  }
+  const [first, ...rest] = palette;
+  return first ? [first, ...transitionStops, ...rest] : transitionStops;
+};
+
 const buildPalette = (
   color: ColorSettings,
   exportOptions: ExportOptions,
@@ -200,6 +233,7 @@ const buildPalette = (
   const foreground = hexToRgb(color.foregroundColor) ?? { r: 255, g: 255, b: 255 };
   const mode = color.paletteMode as string;
   const echoAnimation = isEchoActive(animation) ? animation : null;
+  const matrixTransitionStops = buildMatrixTransitionPaletteStops(animation, background, foreground);
   let palette: RgbColor[];
 
   if (mode === "single" || mode === "duotone") {
@@ -236,6 +270,7 @@ const buildPalette = (
     });
   }
 
+  palette = seedMatrixTransitionPalette(palette, matrixTransitionStops);
   const activePalette = dedupePalette(color.invert ? palette.map(invertRgb) : palette).slice(0, usableColors);
   return transparent ? [{ r: 0, g: 0, b: 0 }, ...activePalette] : activePalette;
 };

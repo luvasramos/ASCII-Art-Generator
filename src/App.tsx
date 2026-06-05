@@ -4,6 +4,7 @@ import { normalizeCharacterSet } from "./ascii/charset";
 import { downloadBlob } from "./export/download";
 import { exportAsciiGif } from "./export/exportGif";
 import { createCanvasPngBlob, createPngBlob, exportPng } from "./export/exportPng";
+import { exportAsciiPngSequence } from "./export/exportPngSequence";
 import { renderAsciiAnimationFrames } from "./export/renderAnimationFrames";
 import { exportSvg } from "./export/exportSvg";
 import { exportAsciiFrameSequence, exportAsciiVideo, type VideoExportExtension } from "./export/exportVideo";
@@ -835,6 +836,66 @@ export default function App() {
     store.imageName
   ]);
 
+  const handleExportAnimationPngSequence = useCallback(async () => {
+    if (!staticImageData || !imageAnimator || isExportingVideo) {
+      return;
+    }
+
+    const controller = new AbortController();
+    videoExportAbortRef.current = controller;
+    setIsExportingVideo(true);
+    setVideoExportProgress(0);
+
+    try {
+      const animationSettings = {
+        ...store.animation,
+        enabled: true
+      };
+      await exportAsciiPngSequence({
+        sourceName: store.imageName,
+        duration: animationSettings.loopDuration,
+        font: store.font,
+        ascii: store.ascii,
+        image: store.image,
+        frame: store.frame,
+        breakup: store.breakup,
+        color: store.color,
+        exportOptions: store.exportOptions,
+        exportScale: store.exportScale,
+        glyphMetrics,
+        animation: animationSettings,
+        fps: animationSettings.fps,
+        quality: store.exportOptions.animatedExportQuality,
+        signal: controller.signal,
+        onProgress: setVideoExportProgress,
+        onStatus: setStatus,
+        getFrame: (time) => imageAnimator.render(animationSettings, time)
+      });
+      setStatus("Exported PNG sequence");
+    } catch (error) {
+      setStatus(isAbortError(error) ? "PNG sequence export canceled" : error instanceof Error ? error.message : "Export failed");
+    } finally {
+      videoExportAbortRef.current = null;
+      setIsExportingVideo(false);
+      setVideoExportProgress(0);
+    }
+  }, [
+    glyphMetrics,
+    imageAnimator,
+    isExportingVideo,
+    staticImageData,
+    store.animation,
+    store.ascii,
+    store.breakup,
+    store.color,
+    store.exportOptions,
+    store.exportScale,
+    store.font,
+    store.frame,
+    store.image,
+    store.imageName
+  ]);
+
   const handleStillImageModeChange = useCallback(
     (mode: StillImageMode) => {
       if (mediaKind !== "image") {
@@ -866,6 +927,8 @@ export default function App() {
           font={store.font}
           ascii={store.ascii}
           color={store.color}
+          exportOptions={store.exportOptions}
+          exportScale={store.exportScale}
           image={store.image}
           frame={store.frame}
           frameFitKey={`${store.frame.aspectRatio}:${store.frame.customCanvasWidth}:${store.frame.customCanvasHeight}`}
@@ -885,9 +948,13 @@ export default function App() {
           onToggleVideoPlayback={handleToggleVideoPlayback}
           onVideoSeek={handleVideoSeek}
           animatedImageRenderer={imageAnimator}
+          livePreviewSourceImageData={staticImageData}
           animateStillImageActive={isStillImageAnimationActive}
           onAnimationPerformanceWarning={setStatus}
           toneRangePreview={toneRangePreview}
+          onExportAnimation={handleExportAnimation}
+          isExportingVideo={isExportingVideo}
+          videoExportProgress={videoExportProgress}
         />
         <TopLeftActions
           grid={grid}
@@ -901,6 +968,7 @@ export default function App() {
           onExportAnimation={handleExportAnimation}
           onExportAnimationMp4={handleExportAnimationMp4}
           onExportAnimationGif={handleExportAnimationGif}
+          onExportAnimationPngSequence={handleExportAnimationPngSequence}
           onCancelVideoExport={handleCancelVideoExport}
           isVideoLoaded={mediaKind === "video" && Boolean(videoSource)}
           showAnimationExports={showAnimationExports}

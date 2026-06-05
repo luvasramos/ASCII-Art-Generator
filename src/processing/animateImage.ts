@@ -8,6 +8,18 @@ export interface AnimatedImageRenderer {
   render: (settings: AnimationSettings, timeSeconds: number) => ImageData;
 }
 
+export interface AnimatedImageRendererOptions {
+  stripSize?: number;
+  imageSmoothingQuality?: ImageSmoothingQuality;
+}
+
+const clampStripSize = (value: number | undefined) => {
+  if (!Number.isFinite(value)) {
+    return 1;
+  }
+  return Math.min(24, Math.max(1, Math.round(value ?? 1)));
+};
+
 const createCanvas = (width: number, height: number) => {
   const canvas = document.createElement("canvas");
   canvas.width = width;
@@ -44,9 +56,14 @@ const computeDisplacement = (
   return (broadWave * 0.58 + detailWave * 0.3 + fineWave * 0.12) * amountPixels;
 };
 
-export const createAnimatedImageRenderer = (source: ImageData): AnimatedImageRenderer => {
+export const createAnimatedImageRenderer = (
+  source: ImageData,
+  options: AnimatedImageRendererOptions = {}
+): AnimatedImageRenderer => {
   const width = source.width;
   const height = source.height;
+  const stripSize = clampStripSize(options.stripSize);
+  const imageSmoothingQuality = options.imageSmoothingQuality ?? "high";
   const sourceCanvas = createCanvas(width, height);
   const passCanvas = createCanvas(width, height);
   const outputCanvas = createCanvas(width, height);
@@ -69,10 +86,9 @@ export const createAnimatedImageRenderer = (source: ImageData): AnimatedImageRen
     amountPixels: number
   ) => {
     const ctx = output === passCanvas ? passCtx : outputCtx;
-    const stripSize = 1;
     ctx.clearRect(0, 0, width, height);
     ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = "high";
+    ctx.imageSmoothingQuality = imageSmoothingQuality;
     // Draw only displaced strips; drawing the source first leaves a static ghost behind transparent PNGs.
 
     if (horizontal) {

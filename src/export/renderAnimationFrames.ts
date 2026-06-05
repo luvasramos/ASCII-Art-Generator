@@ -52,6 +52,7 @@ export interface RenderAsciiAnimationFramesOptions {
   renderLikePreview?: boolean;
   signal?: AbortSignal;
   onFrameStart?: (frameIndex: number, totalFrames: number) => void;
+  onCanvasReady?: (width: number, height: number, totalFrames: number) => void;
   getFrame: (timeSeconds: number, progress: number, frameIndex: number, totalFrames: number) => ImageData | Promise<ImageData>;
 }
 
@@ -96,6 +97,7 @@ export async function* renderAsciiAnimationFrames({
   renderLikePreview = false,
   signal,
   onFrameStart,
+  onCanvasReady,
   getFrame
 }: RenderAsciiAnimationFramesOptions): AsyncGenerator<RenderedAnimationFrame> {
   const normalizedFps = normalizeAnimationFps(fps);
@@ -173,6 +175,7 @@ export async function* renderAsciiAnimationFrames({
   const echoHistory = createEchoFrameHistory();
   outputCanvas.width = Math.max(1, Math.round(firstGrid.width));
   outputCanvas.height = Math.max(1, Math.round(firstGrid.height));
+  onCanvasReady?.(outputCanvas.width, outputCanvas.height, totalFrames);
   const outputCtx = outputCanvas.getContext("2d");
   if (!outputCtx) {
     throw new Error("Canvas2D is unavailable for animation export.");
@@ -224,6 +227,7 @@ export async function* renderAsciiAnimationFrames({
     onFrameStart?.(frameIndex, totalFrames);
     const { timestamp, progress } = resolveExportAnimationFrameTiming(frameIndex, totalFrames, normalizedFps);
     renderFrame(frameIndex === 0 ? firstFrame : await getFrame(timestamp, progress, frameIndex, totalFrames), timestamp);
+    throwIfAborted(signal);
     yield {
       frameIndex,
       totalFrames,

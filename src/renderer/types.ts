@@ -34,6 +34,9 @@ export type AnimationScaleMovement = "ease" | "constant";
 export type AmbientDirection = "vertical" | "horizontal" | "diagonal" | "circular" | "angle";
 export type EchoFadeCurve = "linear" | "smooth" | "exponential";
 export type AnimationPreviewResolution = "low" | "medium" | "high" | "full";
+export type AnimationPreviewMode = "live" | "rendered";
+export type RenderedPreviewStatus = "idle" | "rendering" | "ready" | "playing" | "paused" | "stale" | "error";
+export type RenderedPreviewQuality = "fast" | "balanced" | "final";
 export type AnimatedExportQuality = "preview" | "standard" | "high" | "master";
 export type ToneRangePreview = "shadows" | "midtones" | "highlights";
 
@@ -138,6 +141,9 @@ export interface AnimationSettings {
   scaleMax: number;
   scaleMovement: AnimationScaleMovement;
   matrixLoopStyle: AnimationLoopStyle;
+  matrixTransitionColorEnabled: boolean;
+  matrixTransitionColor: string;
+  matrixTransitionAmount: number;
   spinDirection: AnimationSpinDirection;
   ambientDirection: AmbientDirection;
   ambientAngle: number;
@@ -157,6 +163,26 @@ export interface AnimationSettings {
   echoOpacity: number;
   echoSpacing: number;
   echoFadeCurve: EchoFadeCurve;
+}
+
+export interface RenderedPreviewCachedFramePlaceholder {
+  frameIndex: number;
+  timestamp: number;
+  width: number;
+  height: number;
+}
+
+export interface RenderedPreviewState {
+  mode: AnimationPreviewMode;
+  status: RenderedPreviewStatus;
+  fps: number;
+  frameCount: number;
+  currentFrame: number;
+  progress: number;
+  cacheKey: string | null;
+  quality: RenderedPreviewQuality;
+  cancelRequestId: string | null;
+  error: string | null;
 }
 
 export interface ExportOptions {
@@ -261,6 +287,7 @@ export interface CellRenderData extends CellMetrics {
   foregroundAlpha: number;
   backgroundAlpha: number;
   isParticle: boolean;
+  matrixTransition?: number;
 }
 
 export interface RenderGrid {

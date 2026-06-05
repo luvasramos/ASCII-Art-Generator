@@ -25,6 +25,7 @@ interface TopLeftActionsProps {
   onExportAnimation: () => void;
   onExportAnimationMp4: () => void;
   onExportAnimationGif: () => void;
+  onExportAnimationPngSequence: () => void;
   onCancelVideoExport: () => void;
   isVideoLoaded: boolean;
   showAnimationExports: boolean;
@@ -40,10 +41,11 @@ interface TopLeftActionsProps {
 
 const compactFileName = (name: string) => (name.length > 36 ? `${name.slice(0, 33)}...` : name);
 
-type ExportFileType = "png" | "svg" | "webm" | "mp4" | "gif";
+type ExportFileType = "png" | "png-sequence" | "svg" | "webm" | "mp4" | "gif";
 
 const exportFileTypeOptions: Array<{ value: ExportFileType; label: string }> = [
   { value: "png", label: "PNG" },
+  { value: "png-sequence", label: "PNG Sequence (.zip)" },
   { value: "svg", label: "SVG" },
   { value: "webm", label: "WebM" },
   { value: "mp4", label: "MP4" },
@@ -68,6 +70,7 @@ export const TopLeftActions = ({
   onExportAnimation,
   onExportAnimationMp4,
   onExportAnimationGif,
+  onExportAnimationPngSequence,
   onCancelVideoExport,
   isVideoLoaded,
   showAnimationExports,
@@ -84,6 +87,9 @@ export const TopLeftActions = ({
   const [exportOpen, setExportOpen] = useState(false);
   const [fileType, setFileType] = useState<ExportFileType>("png");
   const { font, exportOptions, exportScale, updateFont, updateExportOptions, updateExportScale } = useStudioStore();
+  const availableExportFileTypeOptions = showAnimationExports
+    ? exportFileTypeOptions
+    : exportFileTypeOptions.filter((option) => option.value !== "png-sequence");
   const exportDisabled = !grid || isExportingVideo;
   const animatedDuration = isVideoLoaded ? videoDuration : showAnimationExports ? animationDuration : 0;
   const animatedEstimate = estimateAnimatedExportSize({
@@ -99,14 +105,18 @@ export const TopLeftActions = ({
   const animatedExportAvailable = isVideoLoaded || showAnimationExports;
   const selectedAnimatedVideoExport = fileType === "webm" || fileType === "mp4";
   const selectedGifExport = fileType === "gif";
+  const selectedPngSequenceExport = fileType === "png-sequence";
   const showAnimatedControls =
-    (selectedAnimatedVideoExport && animatedExportAvailable) || (selectedGifExport && showAnimationExports);
+    (selectedAnimatedVideoExport && animatedExportAvailable) ||
+    (selectedGifExport && showAnimationExports) ||
+    (selectedPngSequenceExport && showAnimationExports);
   const showPngControls = fileType === "png";
   const selectedExportDisabled =
     exportDisabled ||
-    ((selectedAnimatedVideoExport || selectedGifExport) && isProcessing) ||
+    ((selectedAnimatedVideoExport || selectedGifExport || selectedPngSequenceExport) && isProcessing) ||
     (selectedAnimatedVideoExport && !animatedExportAvailable) ||
-    (selectedGifExport && !showAnimationExports);
+    (selectedGifExport && !showAnimationExports) ||
+    (selectedPngSequenceExport && !showAnimationExports);
   const outputScale = fileType === "svg" ? 1 : exportScale;
   const canvasWidth = grid ? Math.max(1, Math.round(grid.width)) : null;
   const canvasHeight = grid ? Math.max(1, Math.round(grid.height)) : null;
@@ -124,6 +134,11 @@ export const TopLeftActions = ({
         : animatedEstimate && fileType === "gif"
           ? animatedEstimate.gifBytes
           : null;
+  const selectedFileTypeLabel =
+    exportFileTypeOptions.find((option) => option.value === fileType)?.label ?? fileType.toUpperCase();
+  const selectedAnimatedScaleLabel = selectedPngSequenceExport ? "Export Scale" : "Video Scale";
+  const selectedAnimatedQualityLabel = selectedPngSequenceExport ? "Animation Quality" : "Video Quality";
+  const selectedAnimatedScaleSummaryLabel = selectedPngSequenceExport ? "Export scale" : "Video scale";
   const mp4HighResolutionWarning =
     fileType === "mp4" &&
     showAnimatedControls &&
@@ -156,6 +171,11 @@ export const TopLeftActions = ({
       return;
     }
 
+    if (fileType === "png-sequence") {
+      onExportAnimationPngSequence();
+      return;
+    }
+
     if (fileType === "mp4") {
       if (isVideoLoaded) {
         onExportVideoMp4();
@@ -171,6 +191,12 @@ export const TopLeftActions = ({
       onExportAnimation();
     }
   };
+
+  useEffect(() => {
+    if (fileType === "png-sequence" && !showAnimationExports) {
+      setFileType("png");
+    }
+  }, [fileType, showAnimationExports]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -259,7 +285,7 @@ export const TopLeftActions = ({
               <Select
                 label="File type"
                 value={fileType}
-                options={exportFileTypeOptions}
+                options={availableExportFileTypeOptions}
                 onChange={(value) => setFileType(value as ExportFileType)}
               />
             </div>
@@ -311,7 +337,7 @@ export const TopLeftActions = ({
             <div className="rounded-2xl border border-white/[0.06] bg-black/20 px-3 py-2 text-[11px] leading-5 text-zinc-500">
               <div className="flex items-center justify-between gap-3">
                 <span>File type</span>
-                <span className="tabular-nums text-zinc-300">{fileType.toUpperCase()}</span>
+                <span className="tabular-nums text-zinc-300">{selectedFileTypeLabel}</span>
               </div>
               <div className="flex items-center justify-between gap-3">
                 <span>Canvas</span>
@@ -343,13 +369,13 @@ export const TopLeftActions = ({
           {showAnimatedControls && (
             <div className="space-y-3">
               <Select
-                label="Video Scale"
+                label={selectedAnimatedScaleLabel}
                 value={String(exportScale)}
                 options={videoScaleOptions}
                 onChange={(value) => updateExportScale(Number(value))}
               />
               <Select
-                label="Video Quality"
+                label={selectedAnimatedQualityLabel}
                 value={exportOptions.animatedExportQuality}
                 options={animatedExportQualityOptions}
                 onChange={(value) => updateExportOptions({ animatedExportQuality: value as AnimatedExportQuality })}
@@ -357,7 +383,7 @@ export const TopLeftActions = ({
               <div className="rounded-2xl border border-white/[0.06] bg-black/20 px-3 py-2 text-[11px] leading-5 text-zinc-500">
                 <div className="flex items-center justify-between gap-3">
                   <span>File type</span>
-                  <span className="tabular-nums text-zinc-300">{fileType.toUpperCase()}</span>
+                  <span className="tabular-nums text-zinc-300">{selectedFileTypeLabel}</span>
                 </div>
                 <div className="flex items-center justify-between gap-3">
                   <span>Canvas</span>
@@ -366,7 +392,7 @@ export const TopLeftActions = ({
                   </span>
                 </div>
                 <div className="flex items-center justify-between gap-3">
-                  <span>Video scale</span>
+                  <span>{selectedAnimatedScaleSummaryLabel}</span>
                   <span className="tabular-nums text-zinc-300">{exportScale}x</span>
                 </div>
                 <div className="flex items-center justify-between gap-3">
