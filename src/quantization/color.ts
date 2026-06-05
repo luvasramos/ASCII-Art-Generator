@@ -10,8 +10,11 @@ const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
 
 export const clampByte = (value: number) => Math.min(255, Math.max(0, Math.round(value)));
 
+const asColorString = (color: unknown, fallback = "#000000") =>
+  typeof color === "string" && color.trim() ? color : fallback;
+
 export const parseHexColor = (hex: string): Rgb => {
-  const normalized = hex.replace("#", "").trim();
+  const normalized = asColorString(hex).replace("#", "").trim();
   const value =
     normalized.length === 3
       ? normalized
@@ -36,9 +39,10 @@ const applyBands = (value: number, bands: number) => {
   return Math.round(value * (bands - 1)) / (bands - 1);
 };
 
-// Custom color mode maps luminance through the full user palette, not just two fixed endpoints.
+// Palette modes map luminance through the full color list, not just two fixed endpoints.
 const safePalette = (settings: ColorSettings) => {
-  const palette = settings.customPalette?.filter((color) => /^#[0-9a-f]{6}$/i.test(color)) ?? [];
+  const source = settings.paletteMode === "source" ? settings.sourcePalette : settings.customPalette;
+  const palette = source?.filter((color) => typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color)) ?? [];
   if (palette.length >= 2) {
     return palette;
   }
@@ -76,7 +80,7 @@ export const resolveCellColor = (
     return layer === "foreground" ? settings.foregroundColor : settings.backgroundColor;
   }
 
-  if (settings.paletteMode === "custom") {
+  if (settings.paletteMode === "custom" || settings.paletteMode === "source") {
     const base = samplePalette(corrected, safePalette(settings));
     return `rgb(${base.r}, ${base.g}, ${base.b})`;
   }
@@ -85,20 +89,21 @@ export const resolveCellColor = (
   return `rgb(${gray}, ${gray}, ${gray})`;
 };
 
-export const colorCacheKey = (color: string) => color.replace(/\s+/g, "");
+export const colorCacheKey = (color: string) => asColorString(color).replace(/\s+/g, "");
 
 export const invertCssColor = (color: string) => {
-  if (/^#[0-9a-f]{3,6}$/i.test(color.trim())) {
-    const rgb = parseHexColor(color);
+  const source = asColorString(color);
+  if (/^#[0-9a-f]{3,6}$/i.test(source.trim())) {
+    const rgb = parseHexColor(source);
     return `rgb(${255 - rgb.r}, ${255 - rgb.g}, ${255 - rgb.b})`;
   }
 
-  const rgbMatch = color.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
+  const rgbMatch = source.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i);
   if (rgbMatch) {
     return `rgb(${255 - clampByte(Number(rgbMatch[1]))}, ${255 - clampByte(Number(rgbMatch[2]))}, ${255 - clampByte(Number(rgbMatch[3]))})`;
   }
 
-  return color;
+  return source;
 };
 
 export const resolveDisplayCellColor = (

@@ -12,12 +12,15 @@ import { analyzeGlyphSet } from "./glyphs/glyphAnalysis";
 import { createAnimatedImageRenderer, type AnimatedImageRenderer } from "./processing/animateImage";
 import { loadFileAsImage, loadImageElement, imageToPreviewData, isSupportedImage } from "./processing/imageInput";
 import { isSupportedVideo, loadFileAsVideo, seekVideo, videoFrameToImageData } from "./processing/videoInput";
+import { extractSourceImagePalette } from "./quantization/sourcePalette";
 import { useAsciiProcessor } from "./renderer/useAsciiProcessor";
 import type { LoadedVideoSource, MediaKind, StillImageMode, ToneRangePreview } from "./renderer/types";
 import { useStudioStore } from "./state/useStudioStore";
 import { RightSidebar } from "./ui/RightSidebar";
 import { StudioCanvas } from "./ui/StudioCanvas";
 import { TopLeftActions } from "./ui/TopLeftActions";
+
+declare const process: { env: { NODE_ENV?: string } };
 
 const persistedImageLimit = 3_200_000;
 
@@ -66,10 +69,13 @@ export default function App() {
   const [mediaVersion, setMediaVersion] = useState(0);
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [toneRangePreview, setToneRangePreview] = useState<ToneRangePreview | null>(null);
+  const [sourcePaletteRefreshVersion, setSourcePaletteRefreshVersion] = useState(0);
+  const [sourcePaletteExtracting, setSourcePaletteExtracting] = useState(false);
   const videoSourceRef = useRef<LoadedVideoSource | null>(null);
   const videoPreviewLastSampleRef = useRef(-1);
   const videoExportAbortRef = useRef<AbortController | null>(null);
   const syncedImageDataUrlRef = useRef<string | null>(null);
+  const sourcePaletteRequestRef = useRef(0);
 
   const releaseVideoSource = useCallback(() => {
     const current = videoSourceRef.current;
@@ -200,6 +206,10 @@ export default function App() {
     [store]
   );
 
+  const handleRefreshSourcePalette = useCallback(() => {
+    setSourcePaletteRefreshVersion((version) => version + 1);
+  }, []);
+
   useEffect(
     () => () => {
       releaseVideoSource();
@@ -221,6 +231,45 @@ export default function App() {
       setStatus(error instanceof Error ? error.message : "Image animation unavailable");
     }
   }, [staticImageData]);
+
+  useEffect(() => {
+    if (mediaKind !== "image" || !staticImageData) {
+      setSourcePaletteExtracting(false);
+      return undefined;
+    }
+
+    const requestId = sourcePaletteRequestRef.current + 1;
+    sourcePaletteRequestRef.current = requestId;
+    setSourcePaletteExtracting(true);
+    const handle = window.setTimeout(() => {
+      try {
+        const nextPalette = extractSourceImagePalette(staticImageData, store.color.sourcePaletteSize);
+        if (sourcePaletteRequestRef.current === requestId) {
+          store.setSourcePalette(nextPalette);
+          setSourcePaletteExtracting(false);
+        }
+      } catch (error) {
+        if (process.env.NODE_ENV !== "production") {
+          console.warn("[ASCII Studio] Source color extraction failed", error);
+        }
+        if (sourcePaletteRequestRef.current === requestId) {
+          store.setSourcePalette([]);
+          setSourcePaletteExtracting(false);
+        }
+      }
+    }, 0);
+
+    return () => {
+      window.clearTimeout(handle);
+    };
+  }, [
+    mediaKind,
+    mediaVersion,
+    sourcePaletteRefreshVersion,
+    staticImageData,
+    store.color.sourcePaletteSize,
+    store.setSourcePalette
+  ]);
 
   useEffect(() => {
     console.info("App rendered");
@@ -888,6 +937,9 @@ export default function App() {
         <RightSidebar
           grid={grid}
           onFontFile={handleFontFile}
+          canRefreshSourcePalette={mediaKind === "image" && Boolean(staticImageData)}
+          sourcePaletteExtracting={sourcePaletteExtracting}
+          onRefreshSourcePalette={handleRefreshSourcePalette}
           canAnimateImage={mediaKind === "image" && Boolean(staticImageData)}
           stillImageMode={stillImageMode}
           onStillImageModeChange={handleStillImageModeChange}

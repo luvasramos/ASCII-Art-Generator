@@ -13,6 +13,7 @@ import {
   defaultFrameSettings,
   defaultImageSettings
 } from "./defaults";
+import { normalizePreviewFps } from "../renderer/animationTiming";
 import type {
   AnimationSettings,
   AspectRatioId,
@@ -57,6 +58,7 @@ interface StudioStore {
   updateBreakup: (patch: Partial<BreakupSettings>) => void;
   updateAnimation: (patch: Partial<AnimationSettings>) => void;
   updateColor: (patch: Partial<ColorSettings>) => void;
+  setSourcePalette: (sourcePalette: string[]) => void;
   updateExportOptions: (patch: Partial<ExportOptions>) => void;
   updateExportScale: (exportScale: number) => void;
   setCharacterPreset: (preset: CharacterPreset) => void;
@@ -79,8 +81,31 @@ interface StudioHistorySnapshot extends StudioSettingsSnapshot {
   imageDataUrl: string | null;
 }
 
-const mergePresets = (custom: CharacterPreset[] = []) => {
-  const customOnly = custom.filter((preset) => !preset.builtIn);
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const mergePresets = (custom?: unknown) => {
+  const customOnly = Array.isArray(custom)
+    ? custom
+        .filter((preset): preset is CharacterPreset => {
+          if (!isRecord(preset) || preset.builtIn) {
+            return false;
+          }
+          return (
+            typeof preset.id === "string" &&
+            Boolean(preset.id.trim()) &&
+            typeof preset.name === "string" &&
+            Boolean(preset.name.trim()) &&
+            typeof preset.characters === "string" &&
+            Boolean(preset.characters.trim())
+          );
+        })
+        .map((preset) => ({
+          id: preset.id,
+          name: preset.name,
+          characters: preset.characters
+        }))
+    : [];
   return [...builtInCharacterPresets, ...customOnly];
 };
 
@@ -124,28 +149,66 @@ const validAspectRatios: AspectRatioId[] = [
   "a3-landscape"
 ];
 
-const normalizeColor = (color?: Partial<ColorSettings> & { paletteMode?: string }): ColorSettings => ({
+const normalizeCustomPalette = (palette: unknown) => {
+  const normalized = Array.isArray(palette)
+    ? palette.filter((value) => typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value.trim())).slice(0, 12)
+    : [];
+  return normalized.length ? normalized : defaultColorSettings.customPalette;
+};
+
+const normalizeSourcePaletteSize = (value: unknown) =>
+  Math.round(clamp(asNumber(value, defaultColorSettings.sourcePaletteSize), 4, 16));
+
+const normalizeSourcePalette = (palette: unknown) => {
+  const normalized = Array.isArray(palette)
+    ? palette.filter((value) => typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value.trim())).slice(0, 16)
+    : [];
+  const next = [...normalized];
+  for (const color of defaultColorSettings.sourcePalette) {
+    if (next.length >= 4) {
+      break;
+    }
+    if (!next.includes(color)) {
+      next.push(color);
+    }
+  }
+  return next.length >= 4 ? next : defaultColorSettings.sourcePalette;
+};
+
+const normalizeColor = (
+  color?: Partial<ColorSettings> & { paletteMode?: string; customPalette?: unknown; sourcePalette?: unknown }
+): ColorSettings => ({
   ...defaultColorSettings,
-  paletteMode: color?.paletteMode === "custom" ? "custom" : color?.paletteMode === "single" ? "single" : "grayscale",
-  foregroundColor: color?.foregroundColor ?? defaultColorSettings.foregroundColor,
-  backgroundColor: color?.backgroundColor ?? defaultColorSettings.backgroundColor,
+  paletteMode:
+    color?.paletteMode === "custom"
+      ? "custom"
+      : color?.paletteMode === "single"
+        ? "single"
+        : color?.paletteMode === "source"
+          ? "source"
+          : "grayscale",
+  foregroundColor: asHexColor(color?.foregroundColor, defaultColorSettings.foregroundColor),
+  backgroundColor: asHexColor(color?.backgroundColor, defaultColorSettings.backgroundColor),
   duotoneThreshold: clamp(asNumber(color?.duotoneThreshold, defaultColorSettings.duotoneThreshold), 0, 1),
-  customPalette:
-    color?.customPalette?.filter((value) => typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value)).slice(0, 12) ??
-    defaultColorSettings.customPalette,
-  foregroundCurve: color?.foregroundCurve ?? defaultColorSettings.foregroundCurve,
-  backgroundCurve: color?.backgroundCurve ?? defaultColorSettings.backgroundCurve,
-  tonalCompression: color?.tonalCompression ?? defaultColorSettings.tonalCompression,
-  tonalBands: color?.tonalBands ?? defaultColorSettings.tonalBands,
-  shadowCrush: color?.shadowCrush ?? defaultColorSettings.shadowCrush,
-  highlightClip: color?.highlightClip ?? defaultColorSettings.highlightClip,
-  invert: color?.invert ?? defaultColorSettings.invert
+  customPalette: normalizeCustomPalette(color?.customPalette),
+  sourcePalette: normalizeSourcePalette(color?.sourcePalette),
+  sourcePaletteSize: normalizeSourcePaletteSize(color?.sourcePaletteSize),
+  foregroundCurve: asNumber(color?.foregroundCurve, defaultColorSettings.foregroundCurve),
+  backgroundCurve: asNumber(color?.backgroundCurve, defaultColorSettings.backgroundCurve),
+  tonalCompression: asNumber(color?.tonalCompression, defaultColorSettings.tonalCompression),
+  tonalBands: asNumber(color?.tonalBands, defaultColorSettings.tonalBands),
+  shadowCrush: asNumber(color?.shadowCrush, defaultColorSettings.shadowCrush),
+  highlightClip: asNumber(color?.highlightClip, defaultColorSettings.highlightClip),
+  invert: asBoolean(color?.invert, defaultColorSettings.invert)
 });
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const asNumber = (value: unknown, fallback: number) => (typeof value === "number" && Number.isFinite(value) ? value : fallback);
 const asBoolean = (value: unknown, fallback: boolean) => (typeof value === "boolean" ? value : fallback);
 const asString = (value: unknown, fallback: string) => (typeof value === "string" && value ? value : fallback);
+const asOptionalString = (value: unknown) => (typeof value === "string" && value.trim() ? value : null);
+const asHexColor = (value: unknown, fallback: string) =>
+  typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value.trim()) ? value : fallback;
 
 const imageGlyphDataUrlPattern = /^data:image\/(?:png|svg\+xml|jpeg|webp);/i;
 
@@ -294,6 +357,11 @@ const normalizeBreakup = (
   seed: Math.trunc(asNumber(breakup?.seed, defaultBreakupSettings.seed))
 });
 
+const normalizePreviewResolution = (value?: string): AnimationSettings["previewResolution"] =>
+  value === "low" || value === "medium" || value === "high" || value === "full"
+    ? value
+    : defaultAnimationSettings.previewResolution;
+
 const normalizeAnimation = (
   animation?: Partial<AnimationSettings> & {
     direction?: string;
@@ -302,6 +370,7 @@ const normalizeAnimation = (
     spinDirection?: string;
     ambientDirection?: string;
     echoFadeCurve?: string;
+    previewResolution?: string;
   }
 ): AnimationSettings => {
   const scaleMin = clamp(asNumber(animation?.scaleMin, defaultAnimationSettings.scaleMin), 5, 100);
@@ -362,6 +431,9 @@ const normalizeAnimation = (
         : defaultAnimationSettings.direction,
     loopDuration: clamp(asNumber(animation?.loopDuration, defaultAnimationSettings.loopDuration), 1, 12),
     fps: Math.round(clamp(asNumber(animation?.fps, defaultAnimationSettings.fps), 1, 60)),
+    trueFpsPreview: asBoolean(animation?.trueFpsPreview, defaultAnimationSettings.trueFpsPreview),
+    previewFps: normalizePreviewFps(asNumber(animation?.previewFps, defaultAnimationSettings.previewFps)),
+    previewResolution: normalizePreviewResolution(animation?.previewResolution),
     echoEnabled: asBoolean(animation?.echoEnabled, defaultAnimationSettings.echoEnabled),
     echoCount: Math.round(clamp(asNumber(animation?.echoCount, defaultAnimationSettings.echoCount), 0, 20)),
     echoOpacity: clamp(asNumber(animation?.echoOpacity, defaultAnimationSettings.echoOpacity), 0, 100),
@@ -389,9 +461,9 @@ const normalizeAnimatedExportQuality = (quality?: string): ExportOptions["animat
 };
 
 const normalizeExportOptions = (options?: Partial<ExportOptions>): ExportOptions => ({
-  transparentBackground: options?.transparentBackground ?? defaultExportOptions.transparentBackground,
-  backgroundColor: options?.backgroundColor ?? defaultExportOptions.backgroundColor,
-  alphaThreshold: clamp(options?.alphaThreshold ?? defaultExportOptions.alphaThreshold, 0, 100),
+  transparentBackground: asBoolean(options?.transparentBackground, defaultExportOptions.transparentBackground),
+  backgroundColor: asHexColor(options?.backgroundColor, defaultExportOptions.backgroundColor),
+  alphaThreshold: clamp(asNumber(options?.alphaThreshold, defaultExportOptions.alphaThreshold), 0, 100),
   videoFps: Math.round(clamp(asNumber(options?.videoFps, defaultExportOptions.videoFps), 1, 60)),
   animatedExportQuality: normalizeAnimatedExportQuality(options?.animatedExportQuality)
 });
@@ -469,7 +541,8 @@ const createHistorySnapshot = (state: StudioStore): StudioHistorySnapshot => ({
 
 const normalizeSettingsSnapshot = (settings?: Partial<StudioSettingsSnapshot>): StudioSettingsSnapshot => {
   const color = normalizeColor(settings?.color);
-  const hasExplicitToneInvert = Boolean(settings?.image && "invertTone" in settings.image);
+  const rawImage = isRecord(settings?.image) ? (settings.image as Partial<ImageSettings>) : undefined;
+  const hasExplicitToneInvert = Boolean(rawImage && "invertTone" in rawImage);
   const legacyToneInvert = hasExplicitToneInvert ? defaultImageSettings.invertTone : color.invert;
   if (!hasExplicitToneInvert && color.invert) {
     color.invert = false;
@@ -478,7 +551,7 @@ const normalizeSettingsSnapshot = (settings?: Partial<StudioSettingsSnapshot>): 
   return {
     font: normalizeFont(settings?.font),
     ascii,
-    image: normalizeImage(settings?.image, legacyToneInvert),
+    image: normalizeImage(rawImage, legacyToneInvert),
     frame: normalizeFrame(settings?.frame),
     breakup: normalizeBreakup(settings?.breakup),
     animation: normalizeAnimation(settings?.animation),
@@ -516,15 +589,53 @@ const withUndo = (state: StudioStore, patch: Partial<StudioStore>): Partial<Stud
   redoStack: []
 });
 
-const normalizeSettingsPresets = (presets?: SettingsPreset[]) =>
-  (presets ?? [])
-    .filter((preset) => preset && typeof preset.id === "string" && typeof preset.name === "string")
+const normalizeSettingsPresets = (presets?: unknown) =>
+  (Array.isArray(presets) ? presets : [])
+    .filter((preset): preset is SettingsPreset => {
+      if (!isRecord(preset)) {
+        return false;
+      }
+      return (
+        typeof preset.id === "string" &&
+        Boolean(preset.id.trim()) &&
+        typeof preset.name === "string" &&
+        Boolean(preset.name.trim())
+      );
+    })
     .map((preset) => ({
       id: preset.id,
       name: preset.name,
       createdAt: typeof preset.createdAt === "number" ? preset.createdAt : Date.now(),
       settings: normalizeSettingsSnapshot(preset.settings)
     }));
+
+const normalizeUploadedFonts = (fonts?: unknown): UploadedFontRecord[] =>
+  Array.isArray(fonts)
+    ? fonts
+        .filter((font): font is UploadedFontRecord => {
+          if (!isRecord(font)) {
+            return false;
+          }
+          return (
+            typeof font.id === "string" &&
+            Boolean(font.id.trim()) &&
+            typeof font.family === "string" &&
+            Boolean(font.family.trim()) &&
+            typeof font.displayName === "string" &&
+            Boolean(font.displayName.trim()) &&
+            typeof font.source === "string" &&
+            font.source.startsWith("data:") &&
+            (font.format === "truetype" || font.format === "opentype" || font.format === "woff")
+          );
+        })
+        .map((font) => ({
+          id: font.id,
+          family: font.family,
+          displayName: font.displayName,
+          source: font.source,
+          format: font.format
+        }))
+    : [];
 
 export const useStudioStore = create<StudioStore>()(
   persist(
@@ -569,6 +680,10 @@ export const useStudioStore = create<StudioStore>()(
           const color = normalizeColor({ ...state.color, ...patch });
           return withUndo(state, resolveColorTransition(state, color));
         }),
+      setSourcePalette: (sourcePalette) =>
+        set((state) => ({
+          color: normalizeColor({ ...state.color, sourcePalette })
+        })),
       updateExportOptions: (patch) =>
         set((state) => withUndo(state, { exportOptions: { ...state.exportOptions, ...patch } })),
       updateExportScale: (exportScale) => set((state) => withUndo(state, { exportScale: normalizeExportScale(exportScale) })),
@@ -746,9 +861,10 @@ export const useStudioStore = create<StudioStore>()(
         lastNonDuotoneBackgroundOpacity: state.lastNonDuotoneBackgroundOpacity
       }),
       merge: (persisted, current) => {
-        const value = persisted as Partial<StudioStore> | undefined;
+        const value = isRecord(persisted) ? (persisted as Partial<StudioStore>) : undefined;
         const color = normalizeColor(value?.color);
-        const hasExplicitToneInvert = Boolean(value?.image && "invertTone" in value.image);
+        const rawImage = isRecord(value?.image) ? (value.image as Partial<ImageSettings>) : undefined;
+        const hasExplicitToneInvert = Boolean(rawImage && "invertTone" in rawImage);
         const legacyToneInvert = hasExplicitToneInvert ? defaultImageSettings.invertTone : color.invert;
         if (!hasExplicitToneInvert && color.invert) {
           color.invert = false;
@@ -765,7 +881,7 @@ export const useStudioStore = create<StudioStore>()(
           imageDataUrl: null,
           font: normalizeFont(value?.font),
           ascii,
-          image: normalizeImage(value?.image, legacyToneInvert),
+          image: normalizeImage(rawImage, legacyToneInvert),
           frame: normalizeFrame(value?.frame),
           breakup: normalizeBreakup(value?.breakup),
           animation: normalizeAnimation(value?.animation),
@@ -775,8 +891,8 @@ export const useStudioStore = create<StudioStore>()(
           exportScale: normalizeExportScale(value?.exportScale),
           presets: mergePresets(value?.presets),
           settingsPresets: normalizeSettingsPresets(value?.settingsPresets),
-          activeSettingsPresetId: value?.activeSettingsPresetId ?? null,
-          uploadedFonts: value?.uploadedFonts ?? [],
+          activeSettingsPresetId: asOptionalString(value?.activeSettingsPresetId),
+          uploadedFonts: normalizeUploadedFonts(value?.uploadedFonts),
           undoStack: [],
           redoStack: []
         };

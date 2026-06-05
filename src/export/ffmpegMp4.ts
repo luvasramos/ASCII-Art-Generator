@@ -1,5 +1,6 @@
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile } from "@ffmpeg/util";
+import { normalizeAnimationFps } from "../renderer/animationTiming";
 import type { AnimatedExportQuality } from "../renderer/types";
 
 interface ConvertWebMToMp4Args {
@@ -341,7 +342,7 @@ export const encodePngSequenceToMp4 = async ({
   onStatus,
   onProgress
 }: EncodePngSequenceToMp4Args) => {
-  const normalizedFps = Math.max(1, Math.min(60, Math.round(fps)));
+  const normalizedFps = normalizeAnimationFps(fps);
   const expectedDuration = frameCount / normalizedFps;
   const maxrate = `${Math.max(1, Math.round(bitrateTarget / 1000))}k`;
   const bufsize = `${Math.max(1, Math.round((bitrateTarget * 2) / 1000))}k`;
@@ -605,7 +606,7 @@ export const convertWebMToMp4 = async ({
   onProgress
 }: ConvertWebMToMp4Args) => {
   await validateWebMBlob(webmBlob);
-  const normalizedFps = Math.max(1, Math.min(60, Math.round(fps)));
+  const normalizedFps = normalizeAnimationFps(fps);
   const expectedDuration = frameCount / normalizedFps;
   const maxrate = `${Math.max(1, Math.round(bitrateTarget / 1000))}k`;
   const bufsize = `${Math.max(1, Math.round((bitrateTarget * 2) / 1000))}k`;

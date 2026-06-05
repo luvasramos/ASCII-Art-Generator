@@ -6,7 +6,7 @@ export type BuiltInFont =
   | "VT323";
 
 export type AsciiGlyphMode = "characters" | "images";
-export type PaletteMode = "grayscale" | "custom" | "single";
+export type PaletteMode = "grayscale" | "custom" | "single" | "source";
 
 export type AspectRatioId =
   | "free"
@@ -31,6 +31,7 @@ export type AnimationSpinDirection = "clockwise" | "counterclockwise";
 export type AnimationScaleMovement = "ease" | "constant";
 export type AmbientDirection = "vertical" | "horizontal" | "diagonal" | "circular" | "angle";
 export type EchoFadeCurve = "linear" | "smooth" | "exponential";
+export type AnimationPreviewResolution = "low" | "medium" | "high" | "full";
 export type AnimatedExportQuality = "preview" | "standard" | "high" | "master";
 export type ToneRangePreview = "shadows" | "midtones" | "highlights";
 
@@ -146,6 +147,9 @@ export interface AnimationSettings {
   direction: AnimationDirection;
   loopDuration: number;
   fps: number;
+  trueFpsPreview: boolean;
+  previewFps: number;
+  previewResolution: AnimationPreviewResolution;
   echoEnabled: boolean;
   echoCount: number;
   echoOpacity: number;
@@ -185,6 +189,8 @@ export interface ColorSettings {
   backgroundColor: string;
   duotoneThreshold: number;
   customPalette: string[];
+  sourcePalette: string[];
+  sourcePaletteSize: number;
   foregroundCurve: number;
   backgroundCurve: number;
   tonalCompression: number;

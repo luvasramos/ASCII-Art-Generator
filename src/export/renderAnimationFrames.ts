@@ -6,6 +6,7 @@ import { getTargetAspectRatio } from "../presets/aspectRatios";
 import { generateRenderGrid } from "../processing/renderGrid";
 import { applyRenderResolutionToGeometry, measureCellGeometry, scaleFontForRenderResolution } from "../renderer/geometry";
 import { resolveAnimatedProcessingSettings } from "../renderer/animationEffects";
+import { normalizeAnimationFps, resolveAnimationFrameCount, resolveExportAnimationFrameTiming } from "../renderer/animationTiming";
 import {
   compositeEchoFrame,
   createEchoFrameHistory,
@@ -97,8 +98,8 @@ export async function* renderAsciiAnimationFrames({
   onFrameStart,
   getFrame
 }: RenderAsciiAnimationFramesOptions): AsyncGenerator<RenderedAnimationFrame> {
-  const normalizedFps = Math.max(1, Math.min(60, Math.round(fps)));
-  const totalFrames = Math.max(1, Math.round(Math.max(0.001, duration) * normalizedFps));
+  const normalizedFps = normalizeAnimationFps(fps);
+  const totalFrames = resolveAnimationFrameCount(duration, normalizedFps);
   await waitForFonts(3000);
   throwIfAborted(signal);
   const firstFrame = await getFrame(0, 0, 0, totalFrames);
@@ -221,8 +222,7 @@ export async function* renderAsciiAnimationFrames({
   for (let frameIndex = 0; frameIndex < totalFrames; frameIndex += 1) {
     throwIfAborted(signal);
     onFrameStart?.(frameIndex, totalFrames);
-    const timestamp = frameIndex / normalizedFps;
-    const progress = frameIndex / totalFrames;
+    const { timestamp, progress } = resolveExportAnimationFrameTiming(frameIndex, totalFrames, normalizedFps);
     renderFrame(frameIndex === 0 ? firstFrame : await getFrame(timestamp, progress, frameIndex, totalFrames), timestamp);
     yield {
       frameIndex,

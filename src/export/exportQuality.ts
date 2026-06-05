@@ -1,3 +1,4 @@
+import { normalizeAnimationFps, resolveAnimationFrameCount } from "../renderer/animationTiming";
 import type { AnimatedExportQuality, AnimationType, RenderGrid } from "../renderer/types";
 
 export interface AnimatedExportProfile {
@@ -73,7 +74,7 @@ export const resolveAnimatedExportFps = (
   fps: number,
   _quality: AnimatedExportQuality = "standard",
   _animationType?: AnimationType
-) => Math.max(1, Math.min(60, Math.round(fps)));
+) => normalizeAnimationFps(fps);
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
@@ -141,7 +142,7 @@ export const estimateAnimatedExportSize = ({
   }
 
   const effectiveFps = resolveAnimatedExportFps(fps, quality, animationType);
-  const frames = Math.max(1, Math.round(duration * effectiveFps));
+  const frames = resolveAnimationFrameCount(duration, effectiveFps);
   const width = Math.max(1, Math.round(grid.width * exportScale));
   const height = Math.max(1, Math.round(grid.height * exportScale));
   const pixels = width * height;

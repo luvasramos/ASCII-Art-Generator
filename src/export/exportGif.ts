@@ -12,6 +12,7 @@ import type {
 } from "../renderer/types";
 import { downloadBlob } from "./download";
 import { isEchoActive, resolveEchoLayerAlpha } from "../renderer/echoComposite";
+import { resolveAnimationFrameCount } from "../renderer/animationTiming";
 import { resolveAnimatedExportFps, resolveAnimatedExportProfile } from "./exportQuality";
 import { renderAsciiAnimationFrames } from "./renderAnimationFrames";
 
@@ -213,8 +214,9 @@ const buildPalette = (
     } else {
       palette = [duotoneBackground, foreground].slice(0, usableColors);
     }
-  } else if (mode === "custom") {
-    const stops = (color.customPalette.length ? color.customPalette : [color.backgroundColor, color.foregroundColor])
+  } else if (mode === "custom" || mode === "source") {
+    const paletteSource = mode === "source" ? color.sourcePalette : color.customPalette;
+    const stops = (paletteSource.length ? paletteSource : [color.backgroundColor, color.foregroundColor])
       .map(hexToRgb)
       .filter((entry): entry is RgbColor => Boolean(entry));
     const safeStops = stops.length ? stops : [background, foreground];
@@ -736,7 +738,7 @@ export const exportAsciiGif = async ({
 }: ExportAsciiGifArgs): Promise<GifExportResult> => {
   const exportQuality = quality ?? exportOptions.animatedExportQuality;
   const normalizedFps = resolveAnimatedExportFps(fps, exportQuality, animation?.type);
-  const totalFrames = Math.max(1, Math.round(Math.max(0.001, duration) * normalizedFps));
+  const totalFrames = resolveAnimationFrameCount(duration, normalizedFps);
   const palette = buildPalette(color, exportOptions, exportQuality, animation);
   const transparentIndex = exportOptions.transparentBackground ? 0 : null;
   const alphaThreshold = (exportOptions.alphaThreshold / 100) * 255;

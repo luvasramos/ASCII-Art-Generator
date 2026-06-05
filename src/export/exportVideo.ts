@@ -11,6 +11,7 @@ import type {
   GlyphMetric,
   ImageSettings
 } from "../renderer/types";
+import { resolveAnimationFrameCount } from "../renderer/animationTiming";
 import { downloadBlob } from "./download";
 import { formatBitrate, resolveAnimatedExportFps, resolveVideoEncodingSettings } from "./exportQuality";
 import { collectMp4RuntimeDiagnostics, encodePngSequenceToMp4 } from "./ffmpegMp4";
@@ -329,7 +330,7 @@ export const exportAsciiFrameSequence = async ({
   const exportQuality = quality ?? exportOptions.animatedExportQuality;
   const convertingToMp4 = preferredExtension === "mp4";
   const normalizedFps = resolveAnimatedExportFps(fps, exportQuality, animation?.type);
-  const totalFrames = Math.max(1, Math.round(Math.max(0.001, duration) * normalizedFps));
+  const totalFrames = resolveAnimationFrameCount(duration, normalizedFps);
 
   if (convertingToMp4) {
     logMp4Export("Runtime diagnostics before MP4 export", {

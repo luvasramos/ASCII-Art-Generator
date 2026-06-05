@@ -78,6 +78,8 @@ export const defaultColorSettings: ColorSettings = {
   backgroundColor: "#050608",
   duotoneThreshold: 0.5,
   customPalette: ["#050608", "#9F39FF", "#f3f0e7"],
+  sourcePalette: ["#050608", "#2A3556", "#9F39FF", "#F3F0E7"],
+  sourcePaletteSize: 8,
   foregroundCurve: 0.86,
   backgroundCurve: 1.08,
   tonalCompression: 0.08,
@@ -122,6 +124,9 @@ export const defaultAnimationSettings: AnimationSettings = {
   direction: "both",
   loopDuration: 4,
   fps: 24,
+  trueFpsPreview: false,
+  previewFps: 24,
+  previewResolution: "medium",
   echoEnabled: false,
   echoCount: 4,
   echoOpacity: 50,
@@ -137,4 +142,4 @@ export const defaultExportOptions: ExportOptions = {
   animatedExportQuality: "standard"
 };
 
-export const defaultExportScale = 2;
+export const defaultExportScale = 1;

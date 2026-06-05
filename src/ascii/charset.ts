@@ -1,5 +1,6 @@
-export const normalizeCharacterSet = (input: string) => {
-  const glyphs = Array.from(input.replace(/\n/g, "").replace(/\t/g, " "));
+export const normalizeCharacterSet = (input: unknown) => {
+  const source = typeof input === "string" ? input : "";
+  const glyphs = Array.from(source.replace(/\n/g, "").replace(/\t/g, " "));
   const seen = new Set<string>();
   const unique = glyphs.filter((glyph) => {
     if (seen.has(glyph)) {
@@ -11,4 +12,5 @@ export const normalizeCharacterSet = (input: string) => {
   return unique.length ? unique.join("") : "@%#*+=-:. ";
 };
 
-export const reverseCharacterSet = (input: string) => Array.from(input).reverse().join("");
+export const reverseCharacterSet = (input: unknown) =>
+  Array.from(typeof input === "string" ? input : "").reverse().join("");

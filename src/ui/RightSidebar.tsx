@@ -7,6 +7,7 @@ import {
   ChevronDown,
   CircleDot,
   Contrast,
+  Copy,
   Crop,
   Download,
   FlipHorizontal,
@@ -14,6 +15,7 @@ import {
   Hash,
   Image as ImageIcon,
   Lock,
+  Minus,
   Moon,
   Palette,
   Play,
@@ -63,6 +65,9 @@ import { evaluateNumberExpression } from "../utils/numberExpression";
 interface RightSidebarProps {
   grid: RenderGrid | null;
   onFontFile: (file: File) => void;
+  canRefreshSourcePalette: boolean;
+  sourcePaletteExtracting: boolean;
+  onRefreshSourcePalette: () => void;
   canAnimateImage: boolean;
   stillImageMode: StillImageMode;
   onStillImageModeChange: (mode: StillImageMode) => void;
@@ -200,6 +205,9 @@ const aspectValueForId = (id: AspectRatioId) => {
 export const RightSidebar = ({
   grid,
   onFontFile,
+  canRefreshSourcePalette,
+  sourcePaletteExtracting,
+  onRefreshSourcePalette,
   canAnimateImage,
   stillImageMode,
   onStillImageModeChange,
@@ -214,6 +222,7 @@ export const RightSidebar = ({
   const [characterPresetMessage, setCharacterPresetMessage] = useState<string | null>(null);
   const [settingsPresetName, setSettingsPresetName] = useState("");
   const [settingsPresetError, setSettingsPresetError] = useState<string | null>(null);
+  const [sourcePaletteMessage, setSourcePaletteMessage] = useState<string | null>(null);
   const [matrixOverlayOpen, setMatrixOverlayOpen] = useState(false);
   const [echoOpen, setEchoOpen] = useState(false);
   const {
@@ -357,10 +366,29 @@ export const RightSidebar = ({
         ? "Horizontal"
         : "";
   const colorModeLabel =
-    color.paletteMode === "single" ? "Duotone" : color.paletteMode === "custom" ? "Custom" : "Grayscale";
+    color.paletteMode === "single"
+      ? "Duotone"
+      : color.paletteMode === "custom"
+        ? "Custom"
+        : color.paletteMode === "source"
+          ? "Source Image Colors"
+          : "Grayscale";
   const activeCustomPalette = color.customPalette.length
     ? color.customPalette
     : [color.backgroundColor, color.foregroundColor];
+  const activeSourcePalette = color.sourcePalette.length
+    ? color.sourcePalette
+    : defaultColorSettings.sourcePalette;
+  const copySourcePaletteText = (text: string, successMessage: string) => {
+    if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
+      setSourcePaletteMessage("Clipboard unavailable");
+      return;
+    }
+    void navigator.clipboard.writeText(text).then(
+      () => setSourcePaletteMessage(successMessage),
+      () => setSourcePaletteMessage("Clipboard unavailable")
+    );
+  };
   const resolveCanvasSizeForAspect = (aspectRatio: AspectRatioId) => {
     const ratio = aspectValueForId(aspectRatio);
     const width = clampCanvasDimension(displayedCanvasSize.width);
@@ -941,6 +969,38 @@ export const RightSidebar = ({
             )}
             <Slider disabled={animationControlsDisabled} label="Loop Duration" value={animation.loopDuration} min={1} max={12} step={0.5} unit=" sec" resetValue={defaultAnimationSettings.loopDuration} onChange={(loopDuration) => updateAnimation({ loopDuration })} />
             <Slider disabled={animationControlsDisabled} label="Animation FPS" value={animation.fps} min={1} max={60} step={1} unit=" fps" resetValue={defaultAnimationSettings.fps} onChange={(fps) => updateAnimation({ fps })} />
+            <Toggle
+              disabled={animationControlsDisabled}
+              label="True FPS Preview"
+              checked={animation.trueFpsPreview}
+              onChange={(trueFpsPreview) => updateAnimation({ trueFpsPreview })}
+            />
+            <Select
+              disabled={animationControlsDisabled}
+              label="Preview FPS"
+              value={String(animation.previewFps)}
+              options={[
+                { value: "12", label: "12 fps" },
+                { value: "24", label: "24 fps" },
+                { value: "30", label: "30 fps" },
+                { value: "60", label: "60 fps" }
+              ]}
+              onChange={(previewFps) => updateAnimation({ previewFps: Number(previewFps) })}
+            />
+            <Select
+              disabled={animationControlsDisabled}
+              label="Preview Resolution"
+              value={animation.previewResolution}
+              options={[
+                { value: "low", label: "Low" },
+                { value: "medium", label: "Medium" },
+                { value: "high", label: "High" },
+                { value: "full", label: "Full" }
+              ]}
+              onChange={(previewResolution) =>
+                updateAnimation({ previewResolution: previewResolution as typeof animation.previewResolution })
+              }
+            />
             <div className="rounded-xl border border-white/[0.06] bg-black/20">
               <button
                 type="button"
@@ -1608,7 +1668,8 @@ export const RightSidebar = ({
             options={[
               { value: "single", label: "Duotone" },
               { value: "grayscale", label: "Grayscale" },
-              { value: "custom", label: "Custom" }
+              { value: "custom", label: "Custom" },
+              { value: "source", label: "Source Image Colors" }
             ]}
             onChange={(paletteMode) => updateColor({ paletteMode: paletteMode as typeof color.paletteMode })}
           />
@@ -1702,6 +1763,68 @@ export const RightSidebar = ({
                   Reverse
                 </CommandButton>
               </div>
+            </div>
+          )}
+          {color.paletteMode === "source" && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-8 gap-1.5">
+                {activeSourcePalette.map((paletteColor, index) => (
+                  <button
+                    key={`${paletteColor}-${index}`}
+                    type="button"
+                    title={paletteColor}
+                    className="h-7 rounded-lg border border-white/[0.08] shadow-inner outline-none transition hover:scale-105 focus:border-signal/60 focus:shadow-focus"
+                    style={{ backgroundColor: paletteColor }}
+                    onClick={() => copySourcePaletteText(paletteColor, `Copied ${paletteColor}`)}
+                  />
+                ))}
+              </div>
+              <div className="flex items-center justify-between rounded-xl border border-white/[0.06] bg-black/20 px-3 py-2">
+                <span className="text-xs text-zinc-500">Palette size</span>
+                <div className="flex items-center gap-2">
+                  <IconButton
+                    title="Decrease palette size"
+                    disabled={color.sourcePaletteSize <= 4}
+                    onClick={() => updateColor({ sourcePaletteSize: Math.max(4, color.sourcePaletteSize - 1) })}
+                  >
+                    <Minus size={15} />
+                  </IconButton>
+                  <span className="w-6 text-center text-xs tabular-nums text-zinc-300">{color.sourcePaletteSize}</span>
+                  <IconButton
+                    title="Increase palette size"
+                    disabled={color.sourcePaletteSize >= 16}
+                    onClick={() => updateColor({ sourcePaletteSize: Math.min(16, color.sourcePaletteSize + 1) })}
+                  >
+                    <Plus size={15} />
+                  </IconButton>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <CommandButton
+                  variant="secondary"
+                  disabled={!canRefreshSourcePalette || sourcePaletteExtracting}
+                  onClick={() => {
+                    setSourcePaletteMessage(null);
+                    onRefreshSourcePalette();
+                  }}
+                >
+                  <RotateCcw size={16} />
+                  {sourcePaletteExtracting ? "Extracting" : "Refresh"}
+                </CommandButton>
+                <CommandButton
+                  variant="secondary"
+                  disabled={!activeSourcePalette.length}
+                  onClick={() => copySourcePaletteText(activeSourcePalette.join(" "), "Copied HEX colors")}
+                >
+                  <Copy size={16} />
+                  Copy HEX
+                </CommandButton>
+              </div>
+              {sourcePaletteMessage && (
+                <div className="rounded-xl border border-white/[0.06] bg-black/20 px-3 py-2 text-xs text-zinc-400">
+                  {sourcePaletteMessage}
+                </div>
+              )}
             </div>
           )}
           <div className="flex items-center justify-between rounded-xl border border-white/[0.06] bg-black/20 px-3 py-2">
