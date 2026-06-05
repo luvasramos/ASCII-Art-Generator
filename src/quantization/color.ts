@@ -65,6 +65,11 @@ const samplePalette = (value: number, palette: string[]) => {
   };
 };
 
+const pickPaletteColor = (value: number, palette: string[]) => {
+  const index = Math.min(palette.length - 1, Math.max(0, Math.round(clamp01(value) * (palette.length - 1))));
+  return parseHexColor(palette[index]);
+};
+
 export const resolveCellColor = (
   brightness: number,
   settings: ColorSettings,
@@ -81,7 +86,8 @@ export const resolveCellColor = (
   }
 
   if (settings.paletteMode === "custom" || settings.paletteMode === "source") {
-    const base = samplePalette(corrected, safePalette(settings));
+    const palette = safePalette(settings);
+    const base = settings.paletteMode === "source" ? pickPaletteColor(corrected, palette) : samplePalette(corrected, palette);
     return `rgb(${base.r}, ${base.g}, ${base.b})`;
   }
 

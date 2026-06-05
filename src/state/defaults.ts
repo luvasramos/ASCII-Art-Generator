@@ -69,7 +69,7 @@ export const defaultFrameSettings: FrameSettings = {
   imageOffsetX: 0,
   imageOffsetY: 0,
   imageRotation: 0,
-  dpi: 300
+  dpi: 72
 };
 
 export const defaultColorSettings: ColorSettings = {

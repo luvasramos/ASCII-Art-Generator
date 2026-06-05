@@ -849,8 +849,21 @@ export const useStudioStore = create<StudioStore>()(
     }),
     {
       name: "ascii-rendering-studio",
-      version: 1,
+      version: 2,
       storage: createJSONStorage(() => safeStorage),
+      migrate: (persisted, version) => {
+        if (version >= 2 || !isRecord(persisted)) {
+          return persisted;
+        }
+        const migrated = { ...persisted };
+        if (isRecord(migrated.frame) && migrated.frame.dpi === 300) {
+          migrated.frame = { ...migrated.frame, dpi: defaultFrameSettings.dpi };
+        }
+        if (migrated.exportScale === 2) {
+          migrated.exportScale = defaultExportScale;
+        }
+        return migrated;
+      },
       partialize: (state) => ({
         imageName: state.imageName,
         imageDataUrl: state.imageDataUrl,

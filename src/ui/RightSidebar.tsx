@@ -1775,6 +1775,26 @@ export const RightSidebar = ({
           )}
           {color.paletteMode === "source" && (
             <div className="space-y-3">
+              <div className="flex items-center justify-between rounded-xl border border-white/[0.06] bg-black/20 px-3 py-2">
+                <span className="text-xs text-zinc-500">Palette size</span>
+                <div className="flex items-center gap-2">
+                  <IconButton
+                    title="Decrease palette size"
+                    disabled={color.sourcePaletteSize <= 4}
+                    onClick={() => updateColor({ sourcePaletteSize: Math.max(4, color.sourcePaletteSize - 1) })}
+                  >
+                    <Minus size={15} />
+                  </IconButton>
+                  <span className="w-6 text-center text-xs tabular-nums text-zinc-300">{color.sourcePaletteSize}</span>
+                  <IconButton
+                    title="Increase palette size"
+                    disabled={color.sourcePaletteSize >= 16}
+                    onClick={() => updateColor({ sourcePaletteSize: Math.min(16, color.sourcePaletteSize + 1) })}
+                  >
+                    <Plus size={15} />
+                  </IconButton>
+                </div>
+              </div>
               <div className="space-y-2">
                 {activeSourcePalette.map((paletteColor, index, palette) => {
                   const resetColor = sourcePaletteResetColor(index);
@@ -1831,26 +1851,6 @@ export const RightSidebar = ({
                     </div>
                   );
                 })}
-              </div>
-              <div className="flex items-center justify-between rounded-xl border border-white/[0.06] bg-black/20 px-3 py-2">
-                <span className="text-xs text-zinc-500">Palette size</span>
-                <div className="flex items-center gap-2">
-                  <IconButton
-                    title="Decrease palette size"
-                    disabled={color.sourcePaletteSize <= 4}
-                    onClick={() => updateColor({ sourcePaletteSize: Math.max(4, color.sourcePaletteSize - 1) })}
-                  >
-                    <Minus size={15} />
-                  </IconButton>
-                  <span className="w-6 text-center text-xs tabular-nums text-zinc-300">{color.sourcePaletteSize}</span>
-                  <IconButton
-                    title="Increase palette size"
-                    disabled={color.sourcePaletteSize >= 16}
-                    onClick={() => updateColor({ sourcePaletteSize: Math.min(16, color.sourcePaletteSize + 1) })}
-                  >
-                    <Plus size={15} />
-                  </IconButton>
-                </div>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <CommandButton

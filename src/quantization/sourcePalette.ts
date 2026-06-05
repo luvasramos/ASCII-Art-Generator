@@ -43,6 +43,14 @@ const clampByte = (value: number) => Math.min(255, Math.max(0, Math.round(value)
 export const normalizeSourcePaletteSize = (value: number) =>
   Math.round(Math.min(maxSourcePaletteSize, Math.max(minSourcePaletteSize, Number.isFinite(value) ? value : 8)));
 
+const colorLuminance = ({ r, g, b }: WeightedColor) => (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+
+const colorSaturation = ({ r, g, b }: WeightedColor) => {
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  return max <= 0 ? 0 : (max - min) / max;
+};
+
 const rgbToHex = ({ r, g, b }: WeightedColor) =>
   `#${[r, g, b].map((channel) => clampByte(channel).toString(16).padStart(2, "0")).join("")}`.toUpperCase();
 
@@ -127,11 +135,49 @@ const averageBoxColor = (box: ColorBox): WeightedColor => {
   };
 };
 
+const scoreColor = (color: WeightedColor, meanLuminance: number) => {
+  const luminanceContrast = Math.abs(colorLuminance(color) - meanLuminance);
+  return Math.sqrt(Math.max(1, color.count)) * (1 + colorSaturation(color) * 1.15) * (1 + luminanceContrast * 0.85);
+};
+
+const addDistinctColor = (selected: WeightedColor[], color: WeightedColor, threshold: number) => {
+  if (selected.every((item) => colorDistance(item, color) >= threshold)) {
+    selected.push(color);
+  }
+};
+
 const chooseDistinctColors = (colors: WeightedColor[], targetSize: number) => {
-  const sorted = [...colors].sort((a, b) => b.count - a.count);
-  for (const threshold of [54, 42, 30, 18, 0]) {
-    const selected: WeightedColor[] = [];
-    for (const color of sorted) {
+  const totalWeight = colors.reduce((sum, color) => sum + color.count, 0);
+  const meanLuminance =
+    totalWeight > 0
+      ? colors.reduce((sum, color) => sum + colorLuminance(color) * color.count, 0) / totalWeight
+      : 0.5;
+  const byLuminance = [...colors].sort((a, b) => colorLuminance(a) - colorLuminance(b));
+  const byScore = [...colors].sort((a, b) => scoreColor(b, meanLuminance) - scoreColor(a, meanLuminance));
+  const bandCount = Math.min(targetSize, 6);
+  const seeded: WeightedColor[] = [];
+
+  if (byLuminance.length) {
+    addDistinctColor(seeded, byLuminance[0], 18);
+    addDistinctColor(seeded, byLuminance[byLuminance.length - 1], 18);
+  }
+
+  for (let band = 0; band < bandCount; band += 1) {
+    const low = band / bandCount;
+    const high = (band + 1) / bandCount;
+    const candidate = byScore.find((color) => {
+      const luminance = colorLuminance(color);
+      return luminance >= low && (band === bandCount - 1 ? luminance <= high : luminance < high);
+    });
+    if (candidate) {
+      addDistinctColor(seeded, candidate, 22);
+    }
+  }
+
+  let best = seeded;
+  for (const threshold of [46, 34, 22, 12, 1]) {
+    const selected = [...seeded];
+    for (const color of byScore) {
       if (selected.every((item) => colorDistance(item, color) >= threshold)) {
         selected.push(color);
       }
@@ -139,22 +185,28 @@ const chooseDistinctColors = (colors: WeightedColor[], targetSize: number) => {
         return selected;
       }
     }
+    if (selected.length > best.length) {
+      best = selected;
+    }
   }
-  return sorted.slice(0, targetSize);
+  return best;
 };
 
 const completePalette = (colors: WeightedColor[], targetSize: number) => {
   const selected = chooseDistinctColors(colors, targetSize);
-  for (const hex of fallbackPalette) {
-    if (selected.length >= targetSize) {
+  const sortedFallback = fallbackPalette.map(hexToWeightedColor).sort((a, b) => colorLuminance(a) - colorLuminance(b));
+  for (const fallback of sortedFallback) {
+    if (selected.length >= minSourcePaletteSize) {
       break;
     }
-    const fallback = hexToWeightedColor(hex);
     if (selected.every((color) => colorDistance(color, fallback) >= 18)) {
       selected.push(fallback);
     }
   }
-  return selected.slice(0, targetSize).map(rgbToHex);
+  return selected
+    .slice(0, Math.min(targetSize, selected.length))
+    .sort((a, b) => colorLuminance(a) - colorLuminance(b))
+    .map(rgbToHex);
 };
 
 export const extractSourceImagePalette = (imageData: ImageData, requestedSize: number) => {
@@ -190,7 +242,7 @@ export const extractSourceImagePalette = (imageData: ImageData, requestedSize: n
     r: bucket.r / bucket.count,
     g: bucket.g / bucket.count,
     b: bucket.b / bucket.count,
-    count: bucket.count
+    count: Math.sqrt(bucket.count)
   }));
 
   if (!colors.length) {
