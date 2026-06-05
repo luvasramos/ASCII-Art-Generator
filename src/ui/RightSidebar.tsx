@@ -1806,6 +1806,19 @@ export const RightSidebar = ({
                   updateColor({ sourceColorMapping: sourceColorMapping as typeof color.sourceColorMapping })
                 }
               />
+              {color.sourceColorMapping === "source-match" && (
+                <Select
+                  label="Source Match Background"
+                  value={color.sourceMatchBackground}
+                  options={[
+                    { value: "foreground-only", label: "Foreground only" },
+                    { value: "cell-background", label: "Cell background" }
+                  ]}
+                  onChange={(sourceMatchBackground) =>
+                    updateColor({ sourceMatchBackground: sourceMatchBackground as typeof color.sourceMatchBackground })
+                  }
+                />
+              )}
               <div className="grid grid-cols-2 gap-2">
                 <CommandButton
                   variant="secondary"

@@ -57,6 +57,7 @@ export const exportSvg = ({ grid, font, ascii, color, exportOptions, fileName }:
   const alphaThreshold = exportOptions.alphaThreshold / 100;
   const duotoneMode = color.paletteMode === "single";
   const sourceMatchMode = isSourceMatchMode(color);
+  const sourceMatchCellBackground = sourceMatchMode && color.sourceMatchBackground === "cell-background";
   const imageGlyphs = ascii.glyphMode === "images" && ascii.imageGlyphs.length >= 2 ? ascii.imageGlyphs : [];
   const imageGlyphMapper = imageGlyphs.length
     ? createImageGlyphBrightnessMapper(grid.cells, imageGlyphs.length, ascii.glyphOpacity)
@@ -97,10 +98,13 @@ export const exportSvg = ({ grid, font, ascii, color, exportOptions, fileName }:
   };
 
   const rects = grid.cells
+    .filter(() => !sourceMatchMode || sourceMatchCellBackground)
     .filter((cell) => !exportOptions.transparentBackground || cell.isParticle || cell.coverage >= alphaThreshold)
     .filter((cell) => cell.backgroundAlpha > 0)
     .map((cell) => {
-      const fill = resolveDisplayCellColor(quantizeBrightness(cell.background), color, "background");
+      const fill = sourceMatchCellBackground
+        ? resolveDisplaySourceMatchColor(cell, color)
+        : resolveDisplayCellColor(quantizeBrightness(cell.background), color, "background");
       const opacity = !duotoneMode && cell.backgroundAlpha < 1 ? ` opacity="${formatNumber(cell.backgroundAlpha)}"` : "";
       return `<rect x="${formatNumber(cell.x * stepX)}" y="${formatNumber(cell.y * stepY)}" width="${formatNumber(
         backgroundCellWidth

@@ -242,6 +242,7 @@ export const renderAsciiLayers = ({
   const transparentBackground = exportOptions?.transparentBackground ?? false;
   const alphaThreshold = (exportOptions?.alphaThreshold ?? 0) / 100;
   const sourceMatchMode = isSourceMatchMode(color);
+  const sourceMatchCellBackground = sourceMatchMode && color.sourceMatchBackground === "cell-background";
 
   if (!transparentBackground) {
     const baseBackground = duotoneMode
@@ -254,13 +255,18 @@ export const renderAsciiLayers = ({
 
   // Transparent exports omit low-coverage cells so empty silhouettes stay alpha-clean.
   for (const cell of renderGrid.cells) {
+    if (sourceMatchMode && !sourceMatchCellBackground) {
+      continue;
+    }
     if (transparentBackground && !cell.isParticle && cell.coverage < alphaThreshold) {
       continue;
     }
     if (cell.backgroundAlpha <= 0) {
       continue;
     }
-    const resolvedBackground = resolveDisplayCellColor(quantizeBrightness(cell.background), color, "background");
+    const resolvedBackground = sourceMatchCellBackground
+      ? resolveDisplaySourceMatchColor(cell, color)
+      : resolveDisplayCellColor(quantizeBrightness(cell.background), color, "background");
     const bg = duotoneMode ? resolvedBackground : scaleColorBrightness(resolvedBackground, animationState.brightnessMultiplier);
     backgroundCtx.fillStyle = bg;
     backgroundCtx.globalAlpha = duotoneMode ? 1 : cell.backgroundAlpha;

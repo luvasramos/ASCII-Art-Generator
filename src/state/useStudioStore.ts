@@ -182,6 +182,7 @@ const normalizeColor = (
     sourcePalette?: unknown;
     sourcePaletteOriginal?: unknown;
     sourceColorMapping?: unknown;
+    sourceMatchBackground?: unknown;
   }
 ): ColorSettings => {
   const sourcePalette = normalizeSourcePalette(color?.sourcePalette);
@@ -203,6 +204,7 @@ const normalizeColor = (
     sourcePalette,
     sourcePaletteSize: normalizeSourcePaletteSize(color?.sourcePaletteSize),
     sourceColorMapping: color?.sourceColorMapping === "source-match" ? "source-match" : "palette-map",
+    sourceMatchBackground: color?.sourceMatchBackground === "cell-background" ? "cell-background" : "foreground-only",
     foregroundCurve: asNumber(color?.foregroundCurve, defaultColorSettings.foregroundCurve),
     backgroundCurve: asNumber(color?.backgroundCurve, defaultColorSettings.backgroundCurve),
     tonalCompression: asNumber(color?.tonalCompression, defaultColorSettings.tonalCompression),
