@@ -218,7 +218,7 @@ const buildPalette = (
     const stops = (color.sourcePalette.length ? color.sourcePalette : [color.backgroundColor, color.foregroundColor])
       .map(hexToRgb)
       .filter((entry): entry is RgbColor => Boolean(entry));
-    palette = (stops.length ? stops : [background, foreground]).slice(0, usableColors);
+    palette = [background, ...(stops.length ? stops : [foreground])].slice(0, usableColors);
   } else if (mode === "custom" || mode === "source") {
     const paletteSource = mode === "source" ? color.sourcePalette : color.customPalette;
     const stops = (paletteSource.length ? paletteSource : [color.backgroundColor, color.foregroundColor])

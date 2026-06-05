@@ -100,9 +100,7 @@ export const exportSvg = ({ grid, font, ascii, color, exportOptions, fileName }:
     .filter((cell) => !exportOptions.transparentBackground || cell.isParticle || cell.coverage >= alphaThreshold)
     .filter((cell) => cell.backgroundAlpha > 0)
     .map((cell) => {
-      const fill = sourceMatchMode
-        ? resolveDisplaySourceMatchColor(cell, color)
-        : resolveDisplayCellColor(quantizeBrightness(cell.background), color, "background");
+      const fill = resolveDisplayCellColor(quantizeBrightness(cell.background), color, "background");
       const opacity = !duotoneMode && cell.backgroundAlpha < 1 ? ` opacity="${formatNumber(cell.backgroundAlpha)}"` : "";
       return `<rect x="${formatNumber(cell.x * stepX)}" y="${formatNumber(cell.y * stepY)}" width="${formatNumber(
         backgroundCellWidth

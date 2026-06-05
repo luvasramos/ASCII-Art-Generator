@@ -260,9 +260,7 @@ export const renderAsciiLayers = ({
     if (cell.backgroundAlpha <= 0) {
       continue;
     }
-    const resolvedBackground = sourceMatchMode
-      ? resolveDisplaySourceMatchColor(cell, color)
-      : resolveDisplayCellColor(quantizeBrightness(cell.background), color, "background");
+    const resolvedBackground = resolveDisplayCellColor(quantizeBrightness(cell.background), color, "background");
     const bg = duotoneMode ? resolvedBackground : scaleColorBrightness(resolvedBackground, animationState.brightnessMultiplier);
     backgroundCtx.fillStyle = bg;
     backgroundCtx.globalAlpha = duotoneMode ? 1 : cell.backgroundAlpha;
