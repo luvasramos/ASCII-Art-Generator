@@ -78,6 +78,7 @@ export const defaultColorSettings: ColorSettings = {
   backgroundColor: "#050608",
   duotoneThreshold: 0.5,
   customPalette: ["#050608", "#9F39FF", "#f3f0e7"],
+  sourcePaletteOriginal: ["#050608", "#2A3556", "#9F39FF", "#F3F0E7"],
   sourcePalette: ["#050608", "#2A3556", "#9F39FF", "#F3F0E7"],
   sourcePaletteSize: 8,
   foregroundCurve: 0.86,

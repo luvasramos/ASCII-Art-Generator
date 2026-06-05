@@ -176,31 +176,40 @@ const normalizeSourcePalette = (palette: unknown) => {
 };
 
 const normalizeColor = (
-  color?: Partial<ColorSettings> & { paletteMode?: string; customPalette?: unknown; sourcePalette?: unknown }
-): ColorSettings => ({
-  ...defaultColorSettings,
-  paletteMode:
-    color?.paletteMode === "custom"
-      ? "custom"
-      : color?.paletteMode === "single"
-        ? "single"
-        : color?.paletteMode === "source"
-          ? "source"
-          : "grayscale",
-  foregroundColor: asHexColor(color?.foregroundColor, defaultColorSettings.foregroundColor),
-  backgroundColor: asHexColor(color?.backgroundColor, defaultColorSettings.backgroundColor),
-  duotoneThreshold: clamp(asNumber(color?.duotoneThreshold, defaultColorSettings.duotoneThreshold), 0, 1),
-  customPalette: normalizeCustomPalette(color?.customPalette),
-  sourcePalette: normalizeSourcePalette(color?.sourcePalette),
-  sourcePaletteSize: normalizeSourcePaletteSize(color?.sourcePaletteSize),
-  foregroundCurve: asNumber(color?.foregroundCurve, defaultColorSettings.foregroundCurve),
-  backgroundCurve: asNumber(color?.backgroundCurve, defaultColorSettings.backgroundCurve),
-  tonalCompression: asNumber(color?.tonalCompression, defaultColorSettings.tonalCompression),
-  tonalBands: asNumber(color?.tonalBands, defaultColorSettings.tonalBands),
-  shadowCrush: asNumber(color?.shadowCrush, defaultColorSettings.shadowCrush),
-  highlightClip: asNumber(color?.highlightClip, defaultColorSettings.highlightClip),
-  invert: asBoolean(color?.invert, defaultColorSettings.invert)
-});
+  color?: Partial<ColorSettings> & {
+    paletteMode?: string;
+    customPalette?: unknown;
+    sourcePalette?: unknown;
+    sourcePaletteOriginal?: unknown;
+  }
+): ColorSettings => {
+  const sourcePalette = normalizeSourcePalette(color?.sourcePalette);
+  return {
+    ...defaultColorSettings,
+    paletteMode:
+      color?.paletteMode === "custom"
+        ? "custom"
+        : color?.paletteMode === "single"
+          ? "single"
+          : color?.paletteMode === "source"
+            ? "source"
+            : "grayscale",
+    foregroundColor: asHexColor(color?.foregroundColor, defaultColorSettings.foregroundColor),
+    backgroundColor: asHexColor(color?.backgroundColor, defaultColorSettings.backgroundColor),
+    duotoneThreshold: clamp(asNumber(color?.duotoneThreshold, defaultColorSettings.duotoneThreshold), 0, 1),
+    customPalette: normalizeCustomPalette(color?.customPalette),
+    sourcePaletteOriginal: normalizeSourcePalette(color?.sourcePaletteOriginal ?? sourcePalette),
+    sourcePalette,
+    sourcePaletteSize: normalizeSourcePaletteSize(color?.sourcePaletteSize),
+    foregroundCurve: asNumber(color?.foregroundCurve, defaultColorSettings.foregroundCurve),
+    backgroundCurve: asNumber(color?.backgroundCurve, defaultColorSettings.backgroundCurve),
+    tonalCompression: asNumber(color?.tonalCompression, defaultColorSettings.tonalCompression),
+    tonalBands: asNumber(color?.tonalBands, defaultColorSettings.tonalBands),
+    shadowCrush: asNumber(color?.shadowCrush, defaultColorSettings.shadowCrush),
+    highlightClip: asNumber(color?.highlightClip, defaultColorSettings.highlightClip),
+    invert: asBoolean(color?.invert, defaultColorSettings.invert)
+  };
+};
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const asNumber = (value: unknown, fallback: number) => (typeof value === "number" && Number.isFinite(value) ? value : fallback);
@@ -682,7 +691,7 @@ export const useStudioStore = create<StudioStore>()(
         }),
       setSourcePalette: (sourcePalette) =>
         set((state) => ({
-          color: normalizeColor({ ...state.color, sourcePalette })
+          color: normalizeColor({ ...state.color, sourcePaletteOriginal: sourcePalette, sourcePalette })
         })),
       updateExportOptions: (patch) =>
         set((state) => withUndo(state, { exportOptions: { ...state.exportOptions, ...patch } })),

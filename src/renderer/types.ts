@@ -189,6 +189,7 @@ export interface ColorSettings {
   backgroundColor: string;
   duotoneThreshold: number;
   customPalette: string[];
+  sourcePaletteOriginal: string[];
   sourcePalette: string[];
   sourcePaletteSize: number;
   foregroundCurve: number;

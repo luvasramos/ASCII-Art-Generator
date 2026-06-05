@@ -379,6 +379,14 @@ export const RightSidebar = ({
   const activeSourcePalette = color.sourcePalette.length
     ? color.sourcePalette
     : defaultColorSettings.sourcePalette;
+  const activeSourcePaletteOriginal = color.sourcePaletteOriginal.length
+    ? color.sourcePaletteOriginal
+    : activeSourcePalette;
+  const sourcePaletteResetColor = (index: number) =>
+    activeSourcePaletteOriginal[index] ??
+    activeSourcePalette[index] ??
+    defaultColorSettings.sourcePalette[index % defaultColorSettings.sourcePalette.length];
+  const activeSourcePaletteResetTargets = activeSourcePalette.map((_, index) => sourcePaletteResetColor(index));
   const copySourcePaletteText = (text: string, successMessage: string) => {
     if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
       setSourcePaletteMessage("Clipboard unavailable");
@@ -1767,17 +1775,62 @@ export const RightSidebar = ({
           )}
           {color.paletteMode === "source" && (
             <div className="space-y-3">
-              <div className="grid grid-cols-8 gap-1.5">
-                {activeSourcePalette.map((paletteColor, index) => (
-                  <button
-                    key={`${paletteColor}-${index}`}
-                    type="button"
-                    title={paletteColor}
-                    className="h-7 rounded-lg border border-white/[0.08] shadow-inner outline-none transition hover:scale-105 focus:border-signal/60 focus:shadow-focus"
-                    style={{ backgroundColor: paletteColor }}
-                    onClick={() => copySourcePaletteText(paletteColor, `Copied ${paletteColor}`)}
-                  />
-                ))}
+              <div className="space-y-2">
+                {activeSourcePalette.map((paletteColor, index, palette) => {
+                  const resetColor = sourcePaletteResetColor(index);
+                  return (
+                    <div key={`${index}-${palette.length}`} className="flex items-center gap-2">
+                      <div className="min-w-0 flex-1">
+                        <ColorInput
+                          label={`Color ${index + 1}`}
+                          value={paletteColor}
+                          onChange={(nextColor) => {
+                            const sourcePalette = [...palette];
+                            sourcePalette[index] = nextColor;
+                            updateColor({ sourcePalette });
+                          }}
+                        />
+                      </div>
+                      <div className="flex shrink-0 gap-1">
+                        <IconButton
+                          title="Move color up"
+                          disabled={index === 0}
+                          onClick={() =>
+                            updateColor({
+                              sourcePalette: moveItem(palette, index, -1),
+                              sourcePaletteOriginal: moveItem(activeSourcePaletteResetTargets, index, -1)
+                            })
+                          }
+                        >
+                          <ArrowUp size={14} />
+                        </IconButton>
+                        <IconButton
+                          title="Move color down"
+                          disabled={index === palette.length - 1}
+                          onClick={() =>
+                            updateColor({
+                              sourcePalette: moveItem(palette, index, 1),
+                              sourcePaletteOriginal: moveItem(activeSourcePaletteResetTargets, index, 1)
+                            })
+                          }
+                        >
+                          <ArrowDown size={14} />
+                        </IconButton>
+                        <IconButton
+                          title="Reset color"
+                          disabled={paletteColor.toUpperCase() === resetColor.toUpperCase()}
+                          onClick={() => {
+                            const sourcePalette = [...palette];
+                            sourcePalette[index] = resetColor;
+                            updateColor({ sourcePalette });
+                          }}
+                        >
+                          <RotateCcw size={14} />
+                        </IconButton>
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
               <div className="flex items-center justify-between rounded-xl border border-white/[0.06] bg-black/20 px-3 py-2">
                 <span className="text-xs text-zinc-500">Palette size</span>
