@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 import { builtInFonts } from "../fonts/fontRegistry";
 import { builtInCharacterPresets } from "../presets/characterPresets";
+import { builtInSettingsPresets, turionImageGlyphPresetId } from "../presets/builtInSettingsPresets";
 import {
   isRemovedBuiltInImageGlyphAssetSource,
   isRemovedBuiltInImageGlyphSourceName
@@ -697,10 +698,10 @@ const withUndo = (state: StudioStore, patch: Partial<StudioStore>): Partial<Stud
   redoStack: []
 });
 
-const normalizeSettingsPresets = (presets?: unknown) =>
+const normalizeCustomSettingsPresets = (presets?: unknown) =>
   (Array.isArray(presets) ? presets : [])
     .filter((preset): preset is SettingsPreset => {
-      if (!isRecord(preset)) {
+      if (!isRecord(preset) || preset.builtIn) {
         return false;
       }
       return (
@@ -745,27 +746,58 @@ const normalizeUploadedFonts = (fonts?: unknown): UploadedFontRecord[] =>
         }))
     : [];
 
+const normalizedBuiltInSettingsPresets = builtInSettingsPresets.map((preset) => ({
+  ...preset,
+  settings: normalizeSettingsSnapshot(preset.settings)
+}));
+
+const builtInSettingsPresetIds = new Set(normalizedBuiltInSettingsPresets.map((preset) => preset.id));
+
+const normalizeSettingsPresets = (presets?: unknown) => [
+  ...normalizedBuiltInSettingsPresets,
+  ...normalizeCustomSettingsPresets(presets).filter((preset) => !builtInSettingsPresetIds.has(preset.id))
+];
+
+const defaultSettingsPreset =
+  normalizedBuiltInSettingsPresets.find((preset) => preset.id === turionImageGlyphPresetId) ??
+  normalizedBuiltInSettingsPresets[0] ??
+  null;
+
+const defaultStudioSettings = defaultSettingsPreset?.settings ?? {
+  font: defaultFontSettings,
+  ascii: defaultAsciiSettings,
+  image: defaultImageSettings,
+  frame: defaultFrameSettings,
+  breakup: defaultBreakupSettings,
+  animation: defaultAnimationSettings,
+  color: defaultColorSettings,
+  exportOptions: defaultExportOptions,
+  exportScale: defaultExportScale
+};
+
+const defaultActiveSettingsPresetId = defaultSettingsPreset?.id ?? null;
+
 export const useStudioStore = create<StudioStore>()(
   persist(
     (set, get) => ({
       imageName: "Untitled",
       imageDataUrl: null,
-      font: defaultFontSettings,
-      ascii: defaultAsciiSettings,
-      image: defaultImageSettings,
-      frame: defaultFrameSettings,
-      breakup: defaultBreakupSettings,
-      animation: defaultAnimationSettings,
-      renderedPreview: createRenderedPreviewState(defaultAnimationSettings.fps),
+      font: defaultStudioSettings.font,
+      ascii: defaultStudioSettings.ascii,
+      image: defaultStudioSettings.image,
+      frame: defaultStudioSettings.frame,
+      breakup: defaultStudioSettings.breakup,
+      animation: defaultStudioSettings.animation,
+      renderedPreview: createRenderedPreviewState(defaultStudioSettings.animation.fps),
       livePreviewOptimizationLevel: "balanced",
-      color: defaultColorSettings,
-      exportOptions: defaultExportOptions,
-      exportScale: defaultExportScale,
+      color: defaultStudioSettings.color,
+      exportOptions: defaultStudioSettings.exportOptions,
+      exportScale: defaultStudioSettings.exportScale,
       presets: builtInCharacterPresets,
-      settingsPresets: [],
-      activeSettingsPresetId: null,
+      settingsPresets: normalizedBuiltInSettingsPresets,
+      activeSettingsPresetId: defaultActiveSettingsPresetId,
       uploadedFonts: [],
-      lastNonDuotoneBackgroundOpacity: defaultAsciiSettings.backgroundOpacity,
+      lastNonDuotoneBackgroundOpacity: defaultStudioSettings.ascii.backgroundOpacity,
       undoStack: [],
       redoStack: [],
       setImage: (imageName, imageDataUrl) => set((state) => withUndo(state, { imageName, imageDataUrl })),
@@ -1139,10 +1171,16 @@ export const useStudioStore = create<StudioStore>()(
           };
         }),
       removeSettingsPreset: (id) =>
-        set((state) => ({
-          settingsPresets: state.settingsPresets.filter((preset) => preset.id !== id),
-          activeSettingsPresetId: state.activeSettingsPresetId === id ? null : state.activeSettingsPresetId
-        })),
+        set((state) => {
+          const preset = state.settingsPresets.find((item) => item.id === id);
+          if (!preset || preset.builtIn) {
+            return state;
+          }
+          return {
+            settingsPresets: normalizeSettingsPresets(state.settingsPresets.filter((item) => item.id !== id)),
+            activeSettingsPresetId: state.activeSettingsPresetId === id ? null : state.activeSettingsPresetId
+          };
+        }),
       applySettingsSnapshot: (settings) =>
         set((state) => withUndo(state, {
           ...applySnapshotPatch(settings),
@@ -1193,22 +1231,22 @@ export const useStudioStore = create<StudioStore>()(
         }),
       resetProcessing: () =>
         set((state) => withUndo(state, {
-          font: defaultFontSettings,
-          ascii: defaultAsciiSettings,
-          image: defaultImageSettings,
-          frame: defaultFrameSettings,
-          breakup: defaultBreakupSettings,
-          animation: defaultAnimationSettings,
+          font: defaultStudioSettings.font,
+          ascii: defaultStudioSettings.ascii,
+          image: defaultStudioSettings.image,
+          frame: defaultStudioSettings.frame,
+          breakup: defaultStudioSettings.breakup,
+          animation: defaultStudioSettings.animation,
           renderedPreview: createRenderedPreviewState(
-            defaultAnimationSettings.fps,
+            defaultStudioSettings.animation.fps,
             state.renderedPreview.quality,
             state.renderedPreview.previewFormat
           ),
-          color: defaultColorSettings,
-          exportOptions: defaultExportOptions,
-          exportScale: defaultExportScale,
-          lastNonDuotoneBackgroundOpacity: defaultAsciiSettings.backgroundOpacity,
-          activeSettingsPresetId: null
+          color: defaultStudioSettings.color,
+          exportOptions: defaultStudioSettings.exportOptions,
+          exportScale: defaultStudioSettings.exportScale,
+          lastNonDuotoneBackgroundOpacity: defaultStudioSettings.ascii.backgroundOpacity,
+          activeSettingsPresetId: defaultActiveSettingsPresetId
         }))
     }),
     {
@@ -1247,7 +1285,7 @@ export const useStudioStore = create<StudioStore>()(
         exportOptions: state.exportOptions,
         exportScale: state.exportScale,
         presets: state.presets,
-        settingsPresets: state.settingsPresets,
+        settingsPresets: state.settingsPresets.filter((preset) => !preset.builtIn),
         activeSettingsPresetId: state.activeSettingsPresetId,
         uploadedFonts: state.uploadedFonts,
         lastNonDuotoneBackgroundOpacity: state.lastNonDuotoneBackgroundOpacity
@@ -1267,6 +1305,8 @@ export const useStudioStore = create<StudioStore>()(
           asNumber(value?.lastNonDuotoneBackgroundOpacity, rawAscii.backgroundOpacity)
         );
         const ascii = enforceDuotoneBackgroundOpacity(rawAscii, color);
+        const settingsPresets = normalizeSettingsPresets(value?.settingsPresets);
+        const activeSettingsPresetId = asOptionalString(value?.activeSettingsPresetId);
         return {
           ...current,
           ...value,
@@ -1285,8 +1325,10 @@ export const useStudioStore = create<StudioStore>()(
           exportOptions: normalizeExportOptions(value?.exportOptions),
           exportScale: normalizeExportScale(value?.exportScale),
           presets: mergePresets(value?.presets),
-          settingsPresets: normalizeSettingsPresets(value?.settingsPresets),
-          activeSettingsPresetId: asOptionalString(value?.activeSettingsPresetId),
+          settingsPresets,
+          activeSettingsPresetId: settingsPresets.some((preset) => preset.id === activeSettingsPresetId)
+            ? activeSettingsPresetId
+            : null,
           uploadedFonts,
           undoStack: [],
           redoStack: []

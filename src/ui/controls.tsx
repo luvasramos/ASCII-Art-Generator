@@ -253,21 +253,37 @@ interface SelectProps {
   value: string;
   options: { label: string; value: string }[];
   disabled?: boolean;
+  layout?: "stacked" | "inline";
+  className?: string;
+  triggerClassName?: string;
+  title?: string;
   onChange: (value: string) => void;
 }
 
-export const Select = ({ label, value, options, disabled, onChange }: SelectProps) => (
-  <CustomSelect label={label} value={value} options={options} disabled={disabled} onChange={onChange} />
+export const Select = (props: SelectProps) => (
+  <CustomSelect {...props} />
 );
 
-const CustomSelect = ({ label, value, options, disabled = false, onChange }: SelectProps) => {
+const CustomSelect = ({
+  label,
+  value,
+  options,
+  disabled = false,
+  layout = "stacked",
+  className = "",
+  triggerClassName = "",
+  title,
+  onChange
+}: SelectProps) => {
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(Math.max(0, options.findIndex((option) => option.value === value)));
   const [menuStyle, setMenuStyle] = useState<CSSProperties | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const visualEditingPreview = useVisualEditingPreview();
   const selected = options.find((option) => option.value === value) ?? options[0];
+  const inline = layout === "inline";
 
   useEffect(() => {
     setActiveIndex(Math.max(0, options.findIndex((option) => option.value === value)));
@@ -278,18 +294,20 @@ const CustomSelect = ({ label, value, options, disabled = false, onChange }: Sel
       return;
     }
     const updateMenuStyle = () => {
-      const rect = rootRef.current?.getBoundingClientRect();
+      const rect = (inline ? triggerRef.current : rootRef.current)?.getBoundingClientRect();
       if (!rect) {
         return;
       }
       const menuHeight = Math.min(224, options.length * 40 + 8);
+      const menuWidth = Math.min(window.innerWidth - 16, Math.max(rect.width, inline ? 128 : rect.width));
+      const left = Math.min(Math.max(8, rect.left), Math.max(8, window.innerWidth - menuWidth - 8));
       const shouldFlip = rect.bottom + 8 + menuHeight > window.innerHeight && rect.top > menuHeight + 8;
       setMenuStyle({
         position: "fixed",
         zIndex: 9999,
-        left: rect.left,
+        left,
         top: shouldFlip ? rect.top - menuHeight - 8 : rect.bottom + 8,
-        width: rect.width,
+        width: menuWidth,
         maxHeight: menuHeight
       });
     };
@@ -313,7 +331,7 @@ const CustomSelect = ({ label, value, options, disabled = false, onChange }: Sel
       window.removeEventListener("scroll", updateMenuStyle, true);
       document.removeEventListener("pointerdown", handlePointerDown);
     };
-  }, [open, options.length]);
+  }, [inline, open, options.length]);
 
   const choose = (nextValue: string) => {
     if (nextValue !== value) {
@@ -346,11 +364,26 @@ const CustomSelect = ({ label, value, options, disabled = false, onChange }: Sel
   };
 
   return (
-    <div ref={rootRef} className="relative">
-      <span className="mb-2 block text-xs font-medium text-zinc-400">{label}</span>
+    <div
+      ref={rootRef}
+      className={
+        inline
+          ? `relative flex h-10 min-w-0 items-center gap-2 rounded-xl border border-white/[0.06] bg-black/20 px-3 text-xs text-zinc-400 ${className}`
+          : `relative ${className}`
+      }
+      title={title}
+    >
+      <span className={inline ? "shrink-0 whitespace-nowrap text-xs text-zinc-400" : "mb-2 block text-xs font-medium text-zinc-400"}>
+        {label}
+      </span>
       <button
+        ref={triggerRef}
         type="button"
-        className="flex h-10 w-full items-center justify-between gap-3 rounded-xl border border-white/[0.06] bg-black/25 px-3 text-left text-sm text-zinc-100 outline-none transition hover:border-white/[0.1] focus:border-signal/50 focus:shadow-focus disabled:cursor-not-allowed disabled:opacity-45"
+        className={
+          inline
+            ? `flex h-7 min-w-0 items-center justify-between gap-2 rounded-lg border border-white/[0.06] bg-white/[0.045] px-2 text-left text-xs font-semibold text-zinc-200 outline-none transition hover:border-signal/30 hover:bg-white/[0.07] focus:border-signal/50 focus:shadow-focus disabled:cursor-not-allowed disabled:opacity-45 ${triggerClassName}`
+            : `flex h-10 w-full items-center justify-between gap-3 rounded-xl border border-white/[0.06] bg-black/25 px-3 text-left text-sm text-zinc-100 outline-none transition hover:border-signal/25 hover:bg-white/[0.025] focus:border-signal/50 focus:shadow-focus disabled:cursor-not-allowed disabled:opacity-45 ${triggerClassName}`
+        }
         aria-haspopup="listbox"
         aria-expanded={open}
         disabled={disabled}
@@ -366,7 +399,7 @@ const CustomSelect = ({ label, value, options, disabled = false, onChange }: Sel
       {open && menuStyle && createPortal(
         <div
           ref={listRef}
-          className="overflow-y-auto rounded-xl border border-white/[0.08] bg-[#111114] p-1 shadow-focus"
+          className="overflow-y-auto rounded-xl border border-white/[0.09] bg-[#111114]/95 p-1 shadow-2xl backdrop-blur"
           role="listbox"
           style={menuStyle}
         >
@@ -379,18 +412,18 @@ const CustomSelect = ({ label, value, options, disabled = false, onChange }: Sel
                 type="button"
                 role="option"
                 aria-selected={selectedOption}
-                className={`flex min-h-9 w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition ${
+                className={`flex min-h-9 w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left transition ${
                   selectedOption
-                    ? "bg-signal/15 text-signal"
+                    ? "bg-signal/20 text-zinc-100 ring-1 ring-inset ring-signal/30"
                     : active
-                    ? "bg-white/[0.065] text-zinc-100"
+                    ? "bg-white/[0.07] text-zinc-100"
                     : "text-zinc-400 hover:bg-white/[0.055] hover:text-zinc-100"
-                }`}
+                } ${inline ? "text-xs" : "text-sm"}`}
                 onMouseEnter={() => setActiveIndex(index)}
                 onClick={() => choose(option.value)}
               >
                 <span className="min-w-0 truncate">{option.label}</span>
-                {selectedOption && <Check size={14} className="shrink-0" />}
+                {selectedOption && <Check size={14} className="shrink-0 text-signal" />}
               </button>
             );
           })}

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Maximize2, Minus, Pause, Play, Plus, Redo2, RotateCcw, Undo2, X } from "lucide-react";
+import { ArrowLeft, Maximize2, Minus, Pause, Play, Plus, Redo2, RotateCcw, Undo2, X } from "lucide-react";
 import { createGlyphAtlas } from "../atlas/glyphAtlas";
 import { createImageGlyphAtlas, type ImageGlyphAtlas } from "../atlas/imageGlyphAtlas";
 import { normalizeCharacterSet } from "../ascii/charset";
@@ -17,6 +17,7 @@ import {
 import { useRenderedAnimationPlayback } from "../renderer/useRenderedAnimationPlayback";
 import { getRenderedPreviewCache, useRenderedAnimationPreview } from "../renderer/useRenderedAnimationPreview";
 import type {
+  AnimationPreviewFormat,
   AnimationSettings,
   AsciiSettings,
   BreakupSettings,
@@ -26,7 +27,6 @@ import type {
   FrameSettings,
   GlyphMetric,
   ImageSettings,
-  AnimationPreviewFormat,
   LivePreviewOptimizationLevel,
   RenderGrid,
   RenderedPreviewState,
@@ -35,7 +35,7 @@ import type {
   VideoPlaybackState
 } from "../renderer/types";
 import { useStudioStore } from "../state/useStudioStore";
-import { IconButton } from "./controls";
+import { IconButton, Select } from "./controls";
 
 interface StudioCanvasProps {
   grid: RenderGrid | null;
@@ -227,6 +227,64 @@ const livePreviewStatusText = (
   return `Live ${actualFps}/${stats.targetFps} fps - ${sizeText}`;
 };
 
+const livePreviewCompactStatusText = (
+  active: boolean,
+  paused: boolean,
+  targetFps: number,
+  stats: LivePreviewStats | null,
+  grid: RenderGrid | null,
+  optimizationLabel: string
+) => {
+  const previewWidth = Math.max(1, Math.round(stats?.previewWidth ?? grid?.width ?? 1));
+  const previewHeight = Math.max(1, Math.round(stats?.previewHeight ?? grid?.height ?? 1));
+  const sizeText = `${previewWidth}x${previewHeight}`;
+
+  if (!active) {
+    return "Live preview";
+  }
+  if (stats?.phase === "updating") {
+    return `Updating | ${optimizationLabel}`;
+  }
+  if (stats?.phase === "optimizing") {
+    if (stats.cacheEnabled && stats.cacheFrameCount > 1 && !stats.cacheComplete) {
+      return `Caching ${Math.max(0, stats.cacheFrames)}/${Math.max(1, stats.cacheFrameCount)} | ${optimizationLabel}`;
+    }
+    return `Optimizing | ${optimizationLabel}`;
+  }
+  if (stats?.phase === "testing") {
+    return `Testing | ${optimizationLabel}`;
+  }
+  if (paused) {
+    return `Paused | target ${targetFps} | ${optimizationLabel} | ${sizeText}`;
+  }
+  if (!stats) {
+    return `Target ${targetFps} fps | ${optimizationLabel} | ${sizeText}`;
+  }
+  return `${Math.max(0, Math.round(stats.actualFps))}/${stats.targetFps} fps | ${optimizationLabel} | ${sizeText}`;
+};
+
+const livePreviewOverlayDetails = (stats: LivePreviewStats | null, optimizationLabel: string) => {
+  if (stats?.phase === "updating") {
+    return {
+      title: "Updating preview...",
+      detail: "Refreshing the optimized canvas",
+      progress: null as number | null
+    };
+  }
+  if (stats?.cacheEnabled && stats.cacheFrameCount > 1 && !stats.cacheComplete) {
+    return {
+      title: "Caching live preview...",
+      detail: `${Math.max(0, stats.cacheFrames)} / ${Math.max(1, stats.cacheFrameCount)} frames`,
+      progress: Math.min(1, Math.max(0, stats.cacheFrames / Math.max(1, stats.cacheFrameCount)))
+    };
+  }
+  return {
+    title: "Optimizing live preview...",
+    detail: "Preparing a stable live preview",
+    progress: null as number | null
+  };
+};
+
 export const StudioCanvas = ({
   grid,
   mediaKey,
@@ -334,10 +392,7 @@ export const StudioCanvas = ({
     !inlineFinalPreviewActive &&
     livePreviewPlaying &&
     (!livePreviewStats || livePreviewStats.phase === "optimizing");
-  const displayedLivePreviewStats =
-    livePreviewOptimizationLevel !== "off" && livePreviewOptimizing && stableLivePreviewStats
-      ? stableLivePreviewStats
-      : livePreviewStats;
+  const displayedLivePreviewStats = livePreviewStats;
   const livePreviewPaused =
     animateStillImageActive &&
     (!livePreviewPlaying ||
@@ -361,13 +416,49 @@ export const StudioCanvas = ({
         grid,
         livePreviewOptimizationName
       );
+  const livePreviewCompactLabel = finalQualityStaticPreviewActive
+    ? `Paused | Final | ${Math.max(1, Math.round(grid?.width ?? 1))}x${Math.max(1, Math.round(grid?.height ?? 1))}`
+    : visualEditPreviewActive
+    ? visualEditPreview.pendingReturnToLivePreview
+      ? "Updating final preview"
+      : "Editing | Final quality"
+    : livePreviewCompactStatusText(
+        animateStillImageActive,
+        livePreviewPaused,
+        livePreviewTargetFps,
+        livePreviewStats,
+        grid,
+        livePreviewOptimizationName
+      );
+  const finalPreviewStatusLabel =
+    renderedPreview.status === "stale"
+      ? "Preview outdated"
+      : renderedPreview.status === "rendering"
+      ? renderedPreviewFrameCount > 0
+        ? `Rendering preview | ${renderedPreviewRenderedFrames}/${renderedPreviewFrameCount}`
+        : "Rendering preview"
+      : renderedPreview.status === "error"
+      ? "Preview failed"
+      : `Final preview | ${renderedPreviewFormatLabel} | ${renderedPreview.fps} fps`;
+  const finalPreviewStatusDetail =
+    renderedPreview.status === "error"
+      ? "Try rendering again or return to live preview."
+      : renderedPreview.status === "stale"
+      ? "Settings changed. Render again for an exact preview."
+      : renderedPreview.status === "rendering"
+      ? `${Math.round(renderedPreviewProgress * 100)}%`
+      : `${finalPreviewWidth}x${finalPreviewHeight}`;
+  const finalPreviewPlaybackControlsVisible =
+    renderedPreview.status === "playing" ||
+    renderedPreview.status === "paused" ||
+    renderedPreview.status === "ready";
   const initialLivePreviewScale = grid
     ? estimateInitialLivePreviewScale(grid.width, grid.height, livePreviewTargetFps, livePreviewOptimizationLevel)
     : 1;
   const visibleCanvasWidth = grid
     ? inlineFinalPreviewActive
       ? finalPreviewWidth
-      : finalQualityStaticPreviewActive || (livePreviewOptimizing && !stableLivePreviewStats)
+      : finalQualityStaticPreviewActive || livePreviewOptimizing
       ? grid.width
       : animateStillImageActive
       ? Math.max(1, Math.round(displayedLivePreviewStats?.previewWidth ?? grid.width * initialLivePreviewScale))
@@ -376,7 +467,7 @@ export const StudioCanvas = ({
   const visibleCanvasHeight = grid
     ? inlineFinalPreviewActive
       ? finalPreviewHeight
-      : finalQualityStaticPreviewActive || (livePreviewOptimizing && !stableLivePreviewStats)
+      : finalQualityStaticPreviewActive || livePreviewOptimizing
       ? grid.height
       : animateStillImageActive
       ? Math.max(1, Math.round(displayedLivePreviewStats?.previewHeight ?? grid.height * initialLivePreviewScale))
@@ -388,6 +479,7 @@ export const StudioCanvas = ({
     !finalQualityStaticPreviewActive &&
     !editPreviewActive &&
     (!livePreviewStats || livePreviewStats.phase === "optimizing" || livePreviewStats.phase === "updating");
+  const livePreviewOverlay = livePreviewOverlayDetails(livePreviewStats, livePreviewOptimizationName);
 
   const {
     generate: generateRenderedPreview,
@@ -676,7 +768,7 @@ export const StudioCanvas = ({
       !inlineFinalPreviewActive &&
       (!animateStillImageActive ||
         finalQualityStaticPreviewActive ||
-        (livePreviewOptimizing && !stableLivePreviewStats) ||
+        livePreviewOptimizing ||
         livePreviewStats?.phase === "updating" ||
         editPreviewActive);
     if (
@@ -717,7 +809,6 @@ export const StudioCanvas = ({
     inlineFinalPreviewActive,
     livePreviewOptimizing,
     livePreviewStats?.phase,
-    stableLivePreviewStats,
     visibleCanvasHeight,
     visibleCanvasWidth
   ]);
@@ -1057,49 +1148,27 @@ export const StudioCanvas = ({
                 height: finalPreviewHeight
               }}
             />
-            {livePreviewTransitioning && (
-              <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/20 backdrop-blur-[1px]">
-                <div className="rounded-xl border border-white/[0.08] bg-black/45 px-3 py-2 text-xs font-medium text-zinc-200 shadow-xl">
-                  {livePreviewStats?.phase === "updating" ? "Updating preview..." : livePreviewLabel}
-                </div>
-              </div>
-            )}
-            {inlineFinalPreviewActive && renderedPreview.status === "error" && (
-              <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/35">
-                <div className="mx-4 max-w-md rounded-2xl border border-red-400/30 bg-panel/95 p-4 text-center text-sm text-red-100 shadow-2xl">
-                  {renderedPreview.error ?? "Final preview failed."}
-                </div>
-              </div>
-            )}
           </motion.div>
         )}
 
-        {inlineFinalPreviewRendering && (
-          <div className="pointer-events-none absolute inset-0 z-30 grid place-items-center px-6">
-            <div
-              className="pointer-events-auto w-[min(420px,calc(100vw-48px))] rounded-2xl border border-white/[0.08] bg-panel/95 p-5 text-sm shadow-2xl backdrop-blur"
-              style={{ minWidth: "min(300px, calc(100vw - 48px))" }}
-            >
-              <div className="text-base font-semibold text-zinc-100">Rendering final preview...</div>
-              <div className="mt-3 flex items-center justify-between gap-4 text-sm text-zinc-400">
-                <span>
-                  Frame {renderedPreviewRenderedFrames} of {renderedPreviewFrameCount}
+        {grid && livePreviewTransitioning && (
+          <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center px-6">
+            <div className="w-[min(300px,calc(100vw-48px))] rounded-2xl border border-white/[0.08] bg-panel/90 p-3 text-xs shadow-2xl backdrop-blur">
+              <div className="flex items-center justify-between gap-3">
+                <span className="font-semibold text-zinc-100">{livePreviewOverlay.title}</span>
+                <span className="shrink-0 rounded-full border border-signal/25 bg-signal/10 px-2 py-0.5 text-[11px] font-semibold text-signal">
+                  {livePreviewOptimizationName}
                 </span>
-                <span className="tabular-nums text-zinc-300">{Math.round(renderedPreviewProgress * 100)}%</span>
               </div>
-              <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-white/[0.06]">
-                <div
-                  className="h-full rounded-full bg-signal transition-[width] duration-150"
-                  style={{ width: `${Math.round(renderedPreviewProgress * 100)}%` }}
-                />
-              </div>
-              <button
-                type="button"
-                className="mt-5 h-10 rounded-xl border border-white/[0.08] bg-white/[0.045] px-4 text-sm font-semibold text-zinc-300 transition hover:border-white/[0.14] hover:bg-white/[0.075] hover:text-zinc-100"
-                onClick={cancelRenderedPreview}
-              >
-                Cancel
-              </button>
+              <div className="mt-1 text-zinc-400">{livePreviewOverlay.detail}</div>
+              {typeof livePreviewOverlay.progress === "number" && (
+                <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
+                  <div
+                    className="h-full rounded-full bg-signal transition-[width] duration-150"
+                    style={{ width: `${Math.round(livePreviewOverlay.progress * 100)}%` }}
+                  />
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1113,146 +1182,158 @@ export const StudioCanvas = ({
             >
               {inlineFinalPreviewStatusVisible ? (
                 <>
-                  {(renderedPreview.status === "playing" || renderedPreview.status === "paused" || renderedPreview.status === "ready") && (
-                    <button
-                      type="button"
-                      aria-label={renderedPreview.status === "playing" ? "Pause final preview" : "Play final preview"}
-                      title={renderedPreview.status === "playing" ? "Pause final preview" : "Play final preview"}
-                      className="grid h-10 w-10 place-items-center rounded-xl border border-white/[0.06] bg-white/[0.045] text-zinc-300 transition hover:border-white/[0.12] hover:bg-white/[0.075] hover:text-zinc-100"
-                      onClick={renderedPreview.status === "playing" ? pauseRenderedPreview : resumeRenderedPreview}
-                    >
-                      {renderedPreview.status === "playing" ? <Pause size={16} /> : <Play size={16} />}
-                    </button>
-                  )}
-                  {(renderedPreview.status === "playing" || renderedPreview.status === "paused" || renderedPreview.status === "ready") && (
-                    <button
-                      type="button"
-                      className="grid h-10 w-10 place-items-center rounded-xl border border-white/[0.06] bg-white/[0.045] text-zinc-300 transition hover:border-white/[0.12] hover:bg-white/[0.075] hover:text-zinc-100"
-                      title="Replay final preview"
-                      onClick={replayRenderedPreview}
-                    >
-                      <RotateCcw size={16} />
-                    </button>
-                  )}
-                  <div className="h-10 rounded-xl border border-white/[0.06] bg-black/20 px-3 text-xs leading-10 tabular-nums text-zinc-400">
-                    {renderedPreview.status === "stale"
-                      ? "Preview outdated - Render again"
-                      : renderedPreview.status === "rendering"
-                      ? `Rendering ${renderedPreviewFormatLabel} preview - Frame ${renderedPreviewRenderedFrames} of ${renderedPreviewFrameCount} - ${Math.round(renderedPreviewProgress * 100)}%`
-                      : renderedPreview.status === "error"
-                      ? "Final preview error"
-                      : `Final preview - ${renderedPreviewFormatLabel} - ${renderedPreview.fps} fps - ${finalPreviewWidth}x${finalPreviewHeight}`}
-                  </div>
-                  {renderedPreviewCanUseCache && (
-                    <div className="h-10 rounded-xl border border-signal/20 bg-signal/10 px-3 text-xs font-semibold leading-10 text-signal">
-                      Ready to export
+                  {finalPreviewPlaybackControlsVisible && (
+                    <div className="flex items-center gap-1 rounded-xl border border-white/[0.05] bg-black/15 p-1">
+                      <button
+                        type="button"
+                        aria-label={renderedPreview.status === "playing" ? "Pause final preview" : "Play final preview"}
+                        title={renderedPreview.status === "playing" ? "Pause final preview" : "Play final preview"}
+                        className="grid h-8 w-8 place-items-center rounded-lg border border-white/[0.06] bg-white/[0.045] text-zinc-300 transition hover:border-white/[0.12] hover:bg-white/[0.075] hover:text-zinc-100"
+                        onClick={renderedPreview.status === "playing" ? pauseRenderedPreview : resumeRenderedPreview}
+                      >
+                        {renderedPreview.status === "playing" ? <Pause size={15} /> : <Play size={15} />}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="Replay final preview"
+                        className="grid h-8 w-8 place-items-center rounded-lg border border-white/[0.06] bg-white/[0.045] text-zinc-300 transition hover:border-white/[0.12] hover:bg-white/[0.075] hover:text-zinc-100"
+                        title="Replay final preview"
+                        onClick={replayRenderedPreview}
+                      >
+                        <RotateCcw size={15} />
+                      </button>
                     </div>
                   )}
-                  {renderedPreview.status === "rendering" ? (
-                    <button
-                      type="button"
-                      className="flex h-10 items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.045] px-3 text-xs font-semibold text-zinc-300 transition hover:border-white/[0.14] hover:bg-white/[0.075] hover:text-zinc-100"
-                      onClick={cancelRenderedPreview}
-                    >
-                      <X size={14} />
-                      Cancel
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      className="flex h-10 items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.045] px-3 text-xs font-semibold text-zinc-300 transition hover:border-white/[0.14] hover:bg-white/[0.075] hover:text-zinc-100"
-                      onClick={backToLivePreview}
-                    >
-                      Back to Live
-                    </button>
+                  <div
+                    className={`relative h-10 min-w-[180px] max-w-[min(46vw,360px)] overflow-hidden rounded-xl border px-3 text-xs tabular-nums ${
+                      renderedPreview.status === "error"
+                        ? "border-red-400/25 bg-red-500/10 text-red-100"
+                        : "border-white/[0.06] bg-black/20 text-zinc-400"
+                    }`}
+                    title={finalPreviewStatusDetail}
+                  >
+                    <div className="flex h-full min-w-0 items-center gap-2">
+                      <span className="min-w-0 truncate">{finalPreviewStatusLabel}</span>
+                      <span className="hidden shrink-0 text-zinc-500 sm:inline">{finalPreviewStatusDetail}</span>
+                    </div>
+                    {renderedPreview.status === "rendering" && (
+                      <div className="absolute inset-x-2 bottom-1 h-1 overflow-hidden rounded-full bg-white/[0.07]">
+                        <div
+                          className="h-full rounded-full bg-signal transition-[width] duration-150"
+                          style={{ width: `${Math.round(renderedPreviewProgress * 100)}%` }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                  {renderedPreviewCanUseCache && (
+                    <div className="hidden h-10 rounded-xl border border-signal/20 bg-signal/10 px-3 text-xs font-semibold leading-10 text-signal sm:block">
+                      Export ready
+                    </div>
                   )}
-                  {(renderedPreview.status === "stale" || renderedPreview.status === "error") && (
-                    <button
-                      type="button"
-                      className="flex h-10 items-center gap-2 rounded-xl border border-signal/35 bg-signal/15 px-3 text-xs font-semibold text-signal transition-colors duration-150 hover:border-signal/55 hover:bg-signal/20"
-                      onClick={() => {
-                        void startRenderedPreview();
-                      }}
-                    >
-                      <Play size={14} />
-                      Render Again
-                    </button>
-                  )}
+                  <div className="flex items-center gap-1 rounded-xl border border-white/[0.05] bg-black/15 p-1">
+                    {renderedPreview.status === "rendering" ? (
+                      <button
+                        type="button"
+                        aria-label="Cancel preview render"
+                        title="Cancel preview render"
+                        className="grid h-8 w-8 place-items-center rounded-lg border border-white/[0.08] bg-white/[0.045] text-zinc-300 transition hover:border-white/[0.14] hover:bg-white/[0.075] hover:text-zinc-100"
+                        onClick={cancelRenderedPreview}
+                      >
+                        <X size={15} />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        aria-label="Back to live preview"
+                        title="Back to live preview"
+                        className="grid h-8 w-8 place-items-center rounded-lg border border-white/[0.08] bg-white/[0.045] text-zinc-300 transition hover:border-white/[0.14] hover:bg-white/[0.075] hover:text-zinc-100"
+                        onClick={backToLivePreview}
+                      >
+                        <ArrowLeft size={15} />
+                      </button>
+                    )}
+                    {(renderedPreview.status === "stale" || renderedPreview.status === "error") && (
+                      <button
+                        type="button"
+                        aria-label="Render preview again"
+                        title="Render preview again"
+                        className="flex h-8 items-center gap-1.5 rounded-lg border border-signal/35 bg-signal/15 px-2 text-xs font-semibold text-signal transition-colors duration-150 hover:border-signal/55 hover:bg-signal/20"
+                        onClick={() => {
+                          void startRenderedPreview();
+                        }}
+                      >
+                        <RotateCcw size={14} />
+                        <span className="hidden sm:inline">Render</span>
+                      </button>
+                    )}
+                  </div>
                 </>
               ) : (
                 <>
-                  <button
-                    type="button"
-                    aria-label={livePreviewPaused ? "Play live preview" : "Pause live preview"}
-                    title={livePreviewPaused ? "Play live preview" : "Pause live preview"}
-                    className="grid h-10 w-10 place-items-center rounded-xl border border-white/[0.06] bg-white/[0.045] text-zinc-300 transition hover:border-white/[0.12] hover:bg-white/[0.075] hover:text-zinc-100"
-                    onClick={() => setLivePreviewPlaying((playing) => !playing)}
-                  >
-                    {livePreviewPaused ? <Play size={16} /> : <Pause size={16} />}
-                  </button>
+                  <div className="flex items-center gap-1 rounded-xl border border-white/[0.05] bg-black/15 p-1">
+                    <button
+                      type="button"
+                      aria-label={livePreviewPaused ? "Play live preview" : "Pause live preview"}
+                      title={livePreviewPaused ? "Play live preview" : "Pause live preview"}
+                      className="grid h-8 w-8 place-items-center rounded-lg border border-white/[0.06] bg-white/[0.045] text-zinc-300 transition hover:border-white/[0.12] hover:bg-white/[0.075] hover:text-zinc-100"
+                      onClick={() => setLivePreviewPlaying((playing) => !playing)}
+                    >
+                      {livePreviewPaused ? <Play size={15} /> : <Pause size={15} />}
+                    </button>
+                  </div>
                   <div
-                    className={`h-10 rounded-xl border border-white/[0.06] bg-black/20 px-3 text-xs leading-10 tabular-nums ${
+                    className={`h-10 min-w-[180px] max-w-[min(46vw,360px)] truncate rounded-xl border border-white/[0.06] bg-black/20 px-3 text-xs leading-10 tabular-nums ${
                       livePreviewStats?.isSlow && !livePreviewPaused && !visualEditPreviewActive
                         ? "text-amber-200/90"
                         : "text-zinc-400"
                     }`}
-                    title="Live preview may scale down or skip frames to stay responsive. Preview Animation renders exact FPS."
+                    title={`${livePreviewLabel}. Live preview may scale down or skip frames to stay responsive. Preview Animation renders exact FPS.`}
                   >
-                    {livePreviewLabel}
+                    {livePreviewCompactLabel}
                   </div>
-                  <label
-                    className="flex h-10 items-center gap-2 rounded-xl border border-white/[0.06] bg-black/20 px-3 text-xs text-zinc-400"
-                    title="Controls optimized live preview quality only. Exports and Preview Animation stay final quality."
-                  >
-                    <span className="whitespace-nowrap">Live Preview</span>
-                    <select
-                      className="h-7 rounded-lg border border-white/[0.06] bg-white/[0.045] px-2 text-xs font-semibold text-zinc-200 outline-none transition focus:border-signal/45"
+                  <div className="flex items-center gap-1 rounded-xl border border-white/[0.05] bg-black/15 p-1">
+                    <Select
+                      label="Mode"
+                      layout="inline"
+                      className="h-8 rounded-lg border-0 bg-transparent px-1"
+                      triggerClassName="h-7 w-24"
+                      title="Controls optimized live preview quality only. Exports and Preview Animation stay final quality."
                       value={livePreviewOptimizationLevel}
-                      onChange={(event) => {
-                        setLivePreviewOptimizationLevel(event.target.value as LivePreviewOptimizationLevel);
+                      options={livePreviewOptimizationOptions}
+                      onChange={(value) => {
+                        setLivePreviewOptimizationLevel(value as LivePreviewOptimizationLevel);
                       }}
-                    >
-                      {livePreviewOptimizationOptions.map((option) => (
-                        <option key={option.value} value={option.value} className="bg-panel text-zinc-100">
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                    />
                   {canPreviewAnimation && (
                     <>
-                      <label
-                        className="flex h-10 items-center gap-2 rounded-xl border border-white/[0.06] bg-black/20 px-3 text-xs text-zinc-400"
+                      <Select
+                        label="As"
+                        layout="inline"
+                        className="h-8 rounded-lg border-0 bg-transparent px-1"
+                        triggerClassName="h-7 w-20"
                         title="Controls final preview cache compatibility and suggested export format. Frames render at final output quality."
-                      >
-                        <span className="whitespace-nowrap">Preview as</span>
-                        <select
-                          className="h-7 rounded-lg border border-white/[0.06] bg-white/[0.045] px-2 text-xs font-semibold text-zinc-200 outline-none transition focus:border-signal/45"
-                          value={renderedPreview.previewFormat}
-                          onChange={(event) => {
-                            setAnimationPreviewFormat(event.target.value as AnimationPreviewFormat);
-                          }}
-                        >
-                          {animationPreviewFormatOptions.map((option) => (
-                            <option key={option.value} value={option.value} className="bg-panel text-zinc-100">
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
+                        value={renderedPreview.previewFormat}
+                        options={animationPreviewFormatOptions}
+                        onChange={(value) => {
+                          setAnimationPreviewFormat(value as AnimationPreviewFormat);
+                        }}
+                      />
                       <button
                         type="button"
-                        className="flex h-10 items-center gap-2 rounded-xl border border-signal/35 bg-signal/15 px-3 text-xs font-semibold text-signal transition-colors duration-150 hover:border-signal/55 hover:bg-signal/20 disabled:cursor-not-allowed disabled:opacity-45"
+                        aria-label="Preview animation"
+                        title="Preview animation"
+                        className="flex h-8 items-center gap-1.5 rounded-lg border border-signal/35 bg-signal/15 px-2 text-xs font-semibold text-signal transition-colors duration-150 hover:border-signal/55 hover:bg-signal/20 disabled:cursor-not-allowed disabled:opacity-45"
                         disabled={renderedPreview.status === "rendering"}
                         onClick={() => {
                           void startRenderedPreview();
                         }}
                       >
                         <Play size={14} />
-                        Preview Animation
+                        <span className="hidden sm:inline">Preview</span>
                       </button>
                     </>
                   )}
+                  </div>
                 </>
               )}
             </div>
