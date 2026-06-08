@@ -1,45 +1,69 @@
 # ASCII Rendering Studio
 
-Professional browser-based ASCII image rendering studio for layered grayscale typography.
+ASCII Rendering Studio is a browser-based image and video rendering tool for creating layered ASCII artwork, still exports, and animated exports.
 
-## Open The Standalone App
+## Run Locally
 
-Open `dist/index.html` directly. No install, terminal, local server, `npm run dev`, or `npm run preview` is required for the built app.
-
-Keep `dist/index.html` next to the `dist/assets` folder when copying or zipping the app.
-
-## Development
-
-The project-root `index.html` is for Vite development and references `/src/main.tsx`, which is compiled by Vite during dev.
+Install dependencies, then start the Vite development server:
 
 ```bash
 npm install
 npm run dev
 ```
 
-Then open the URL Vite prints, usually `http://localhost:5173`.
+Open the local URL printed by Vite, usually `http://localhost:5173`.
 
-## Production Build
+## Build
+
+Create the production standalone build:
 
 ```bash
 npm run build
-npm run preview
 ```
 
-The final standalone app is `dist/index.html`. It is safe to copy the `dist` folder to macOS, Windows, or Linux and open `dist/index.html` directly in Chrome, Edge, Safari, or Brave, as long as `index.html` remains next to the `assets` folder.
+The built app is written to `dist/index.html` with its assets in `dist/assets`. The standalone build can be opened directly from `dist/index.html`.
 
-## Direct File Opening
+## Deploy
 
-Open the built `dist/index.html` for no-server use.
+GitHub Pages is configured to serve from:
 
-Standalone mode avoids module workers under `file://` and automatically uses the main-thread renderer. Custom font uploads use the FontFace API with multiple loading fallbacks; if a browser refuses a custom font, the app keeps running and falls back to the configured monospace font stack. PNG and SVG exports use Blob downloads with a Safari-compatible open-in-new-tab fallback.
+```text
+main / docs
+```
 
-When packaging the project, include source files, `package.json`, and `package-lock.json`. Do not include `node_modules`; regenerate it with `npm install`.
+Build and copy the standalone output into `docs`:
 
-## Core Features
+```bash
+npm run build:pages
+```
 
-- JPG, PNG, and WEBP upload, drag-and-drop, and paste input.
-- Layered ASCII rendering with a background block and foreground glyph color for every character cell.
-- Custom TTF, OTF, and WOFF font upload through the FontFace API.
-- Cinematic character presets plus locally saved and importable render presets.
-- Pan/zoom live preview and high-resolution PNG plus SVG export.
+Equivalent manual flow:
+
+```bash
+npm run build
+xcopy dist docs /E /Y
+git add docs
+git commit -m "Deploy build"
+git push origin <current-branch>:main --force-with-lease
+```
+
+The npm deploy helpers only build and copy files. They do not commit or push.
+
+## Preview Model
+
+The live preview is optimized for editing responsiveness with adaptive preview performance. It may reduce preview display work to stay interactive.
+
+Use Preview Animation for the true-FPS animation preview. It renders frames first, caches them, then plays the cached result at the configured animation FPS.
+
+## Supported Exports
+
+- PNG
+- SVG
+- PNG sequence ZIP
+- GIF
+- MP4
+- WebM
+
+## Notes
+
+Standalone builds use browser APIs for rendering and export. Keep `dist/index.html` next to the `dist/assets` folder when copying or zipping the built app.

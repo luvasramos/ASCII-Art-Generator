@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc && vite build && node scripts/build-standalone.mjs",
+    "build:pages": "npm run build && xcopy dist docs /E /Y",
+    "deploy:pages": "npm run build:pages",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {

@@ -26,6 +26,9 @@ declare global {
 const isStandaloneBuild = () =>
   typeof __ASCII_STANDALONE__ !== "undefined" && __ASCII_STANDALONE__ === true;
 
+const mainThreadRendererDiagnostic = "Renderer mode: Main Thread";
+const workerRendererDiagnostic = "Renderer mode: Worker";
+
 interface ProcessorArgs {
   imageData: ImageData | null;
   font: FontSettings;
@@ -47,12 +50,14 @@ export const useAsciiProcessor = ({ imageData, font, ascii, image, frame, breaku
   useEffect(() => {
     if (isStandaloneBuild() || window.__ASCII_STANDALONE__ || window.location.protocol === "file:") {
       workerRef.current = null;
-      setRendererWarning("Standalone mode: using the main-thread renderer.");
+      setRendererWarning(null);
+      console.info(mainThreadRendererDiagnostic);
       return undefined;
     }
 
     if (typeof Worker === "undefined") {
       setRendererWarning("Web Workers are unavailable; using the main-thread renderer.");
+      console.info(mainThreadRendererDiagnostic);
       return undefined;
     }
 
@@ -60,8 +65,10 @@ export const useAsciiProcessor = ({ imageData, font, ascii, image, frame, breaku
       workerRef.current = new Worker(new URL("../workers/asciiWorker.ts", import.meta.url), {
         type: "module"
       });
+      console.info(workerRendererDiagnostic);
     } catch (error) {
       workerRef.current = null;
+      console.info(mainThreadRendererDiagnostic);
       setRendererWarning(
         error instanceof Error
           ? `Worker startup failed; using the main-thread renderer. ${error.message}`
