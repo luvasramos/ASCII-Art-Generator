@@ -1,0 +1,16 @@
+{
+  "id": "selected-1x1",
+  "name": "Selected 1x1 Glyphs",
+  "glyphSize": 1,
+  "glyphs": [
+    "0_glyph.svg",
+    "1_glyph.svg",
+    "2_glyph.svg",
+    "3_glyph.svg",
+    "4_glyph.svg",
+    "5_glyph.svg",
+    "6_glyph.svg",
+    "7_glyph.svg",
+    "8_glyph.svg"
+  ]
+}

@@ -207,7 +207,7 @@ const applyMatrixTransitionColor = (
   const displayTransition = duotoneMode
     ? transitionColor
     : scaleColorBrightness(transitionColor, brightnessMultiplier);
-  return blendCssColors(baseColor, displayTransition, Math.min(0.48, strength));
+  return blendCssColors(baseColor, displayTransition, duotoneMode ? Math.min(0.72, strength * 1.35) : Math.min(0.48, strength));
 };
 
 const drawImageCover = (
@@ -310,7 +310,7 @@ export const renderAsciiLayers = ({
       : resolveDisplayCellColor(quantizeBrightness(cell.background), color, "background");
     const bg = duotoneMode ? resolvedBackground : scaleColorBrightness(resolvedBackground, animationState.brightnessMultiplier);
     backgroundCtx.fillStyle = bg;
-    backgroundCtx.globalAlpha = duotoneMode ? 1 : cell.backgroundAlpha;
+    backgroundCtx.globalAlpha = cell.backgroundAlpha;
     backgroundCtx.fillRect(
       grid.gapX > 0 ? cell.x * stepX : Math.round(cell.x * stepX),
       grid.gapY > 0 ? cell.y * stepY : Math.round(cell.y * stepY),
@@ -370,7 +370,7 @@ export const renderAsciiLayers = ({
       const drawX = cell.x * stepX + (grid.cellWidth - drawWidth) / 2;
       const drawY = cell.y * stepY + (grid.cellHeight - drawHeight) / 2;
       glyphCtx.save();
-      glyphCtx.globalAlpha = duotoneMode ? 1 : cell.foregroundAlpha * animationState.glyphAlphaMultiplier;
+      glyphCtx.globalAlpha = clamp01(cell.foregroundAlpha * animationState.glyphAlphaMultiplier);
       drawImageCover(glyphCtx, tintedGlyph, drawX, drawY, drawWidth, drawHeight, duotoneMode);
       glyphCtx.restore();
       continue;
@@ -398,7 +398,7 @@ export const renderAsciiLayers = ({
     const drawHeight = grid.cellHeight * animationState.glyphScaleMultiplier;
     const drawX = cell.x * stepX + (grid.cellWidth - drawWidth) / 2;
     const drawY = cell.y * stepY + (grid.cellHeight - drawHeight) / 2;
-    glyphCtx.globalAlpha = duotoneMode ? 1 : cell.foregroundAlpha * animationState.glyphAlphaMultiplier;
+    glyphCtx.globalAlpha = clamp01(cell.foregroundAlpha * animationState.glyphAlphaMultiplier);
     glyphCtx.drawImage(
       drawGlyph,
       duotoneMode ? Math.round(drawX) : drawX,

@@ -34,6 +34,7 @@ import {
 import { reverseCharacterSet } from "../ascii/charset";
 import { downloadBlob } from "../export/download";
 import { builtInFonts } from "../fonts/fontRegistry";
+import { builtInImageGlyphPresets, loadBuiltInImageGlyphPreset } from "../glyphs/builtInImageGlyphPresets";
 import { isZipFile, maxImageGlyphs, readImageGlyphFiles, readImageGlyphZip } from "../glyphs/imageGlyphImport";
 import { getAspectRatioPreset } from "../presets/aspectRatios";
 import { createSettingsPresetFile, parseSettingsPresetFile, presetFileName } from "../presets/settingsPresets";
@@ -58,7 +59,16 @@ import type {
   ToneRangePreview,
   UploadedFontRecord
 } from "../renderer/types";
-import { ColorInput, CommandButton, IconButton, Section, Select, Slider, Toggle } from "./controls";
+import {
+  ColorInput,
+  CommandButton,
+  IconButton,
+  Section,
+  Select,
+  Slider,
+  Toggle,
+  VisualEditingPreviewProvider
+} from "./controls";
 import { evaluateNumberExpression } from "../utils/numberExpression";
 
 interface RightSidebarProps {
@@ -71,6 +81,9 @@ interface RightSidebarProps {
   stillImageMode: StillImageMode;
   onStillImageModeChange: (mode: StillImageMode) => void;
   onToneRangePreviewChange: (range: ToneRangePreview | null) => void;
+  onVisualEditPreviewStart: (reason: string) => void;
+  onVisualEditPreviewEnd: () => void;
+  onVisualEditPreviewPulse: (reason: string) => void;
 }
 
 const RatioIcon = ({ width, height, dashed = false }: { width: number | null; height: number | null; dashed?: boolean }) => {
@@ -207,7 +220,10 @@ export const RightSidebar = ({
   canAnimateImage,
   stillImageMode,
   onStillImageModeChange,
-  onToneRangePreviewChange
+  onToneRangePreviewChange,
+  onVisualEditPreviewStart,
+  onVisualEditPreviewEnd,
+  onVisualEditPreviewPulse
 }: RightSidebarProps) => {
   const fontInputRef = useRef<HTMLInputElement | null>(null);
   const presetInputRef = useRef<HTMLInputElement | null>(null);
@@ -218,6 +234,7 @@ export const RightSidebar = ({
   const [characterPresetMessage, setCharacterPresetMessage] = useState<string | null>(null);
   const [settingsPresetName, setSettingsPresetName] = useState("");
   const [settingsPresetError, setSettingsPresetError] = useState<string | null>(null);
+  const [loadingImageGlyphPresetId, setLoadingImageGlyphPresetId] = useState<string | null>(null);
   const [matrixOverlayOpen, setMatrixOverlayOpen] = useState(false);
   const [echoOpen, setEchoOpen] = useState(false);
   const {
@@ -328,7 +345,65 @@ export const RightSidebar = ({
         : presetOptions,
     [effectiveCharacterPresetId, presetOptions]
   );
+  const selectedBuiltInImageGlyphPreset = builtInImageGlyphPresets[0] ?? null;
+  const effectiveImageGlyphPresetId =
+    builtInImageGlyphPresets.find(
+      (preset) => ascii.imageGlyphSourceName === preset.name && ascii.imageGlyphs.length === preset.glyphs.length
+    )?.id ?? "";
   const selectedUploadedFont = uploadedFonts.find((record) => record.family === font.family);
+  const characterTypeControls = (
+    <div className="space-y-3 rounded-xl border border-white/[0.06] bg-black/15 p-3">
+      <input
+        ref={fontInputRef}
+        className="hidden"
+        type="file"
+        accept=".ttf,.otf,.woff,font/ttf,font/otf,font/woff"
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          if (file) {
+            onFontFile(file);
+          }
+          event.currentTarget.value = "";
+        }}
+      />
+      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.08em] text-zinc-500">
+        <Type size={14} />
+        Type
+      </div>
+      <div className="grid grid-cols-[minmax(0,1fr)_6rem_auto] items-end gap-2">
+        <div className="min-w-0">
+          <Select label="Font" value={font.family} options={fontOptions} onChange={(family) => updateFont({ family })} />
+        </div>
+        <Select label="Weight" value={String(font.weight)} options={weightOptions} onChange={(weight) => updateFont({ weight: Number(weight) })} />
+        <IconButton
+          title="Remove uploaded font"
+          disabled={!selectedUploadedFont}
+          onClick={() => {
+            if (selectedUploadedFont) {
+              removeUploadedFont(selectedUploadedFont.id);
+            }
+          }}
+        >
+          <Trash2 size={15} />
+        </IconButton>
+      </div>
+      <CommandButton variant="secondary" onClick={() => fontInputRef.current?.click()}>
+        <Type size={16} />
+        Upload font
+      </CommandButton>
+      <Slider label="Font size" value={font.size} min={7} max={32} step={1} unit="px" resetValue={defaultFontSettings.size} onChange={(size) => updateFont({ size })} />
+      <Slider label="Line height" value={font.lineHeight} min={0.72} max={1.75} resetValue={defaultFontSettings.lineHeight} onChange={(lineHeight) => updateFont({ lineHeight })} />
+      <Slider label="Character spacing" value={font.letterSpacing} min={-2} max={8} resetValue={defaultFontSettings.letterSpacing} onChange={(letterSpacing) => updateFont({ letterSpacing })} />
+    </div>
+  );
+  const visualEditingPreviewControls = useMemo(
+    () => ({
+      start: onVisualEditPreviewStart,
+      end: onVisualEditPreviewEnd,
+      pulse: onVisualEditPreviewPulse
+    }),
+    [onVisualEditPreviewEnd, onVisualEditPreviewPulse, onVisualEditPreviewStart]
+  );
   const animationControlsDisabled = !canAnimateImage || stillImageMode !== "animate" || !animation.enabled;
   const animationSummary = canAnimateImage
     ? animation.enabled
@@ -641,6 +716,31 @@ export const RightSidebar = ({
     }
   };
 
+  const handleBuiltInImageGlyphPreset = async (presetId: string) => {
+    if (!presetId) {
+      return;
+    }
+    const preset = builtInImageGlyphPresets.find((item) => item.id === presetId);
+    if (!preset) {
+      return;
+    }
+    setLoadingImageGlyphPresetId(preset.id);
+    setCharacterPresetMessage(`Loading ${preset.name}...`);
+    try {
+      const imageGlyphs = await loadBuiltInImageGlyphPreset(preset);
+      updateAscii({
+        glyphMode: "images",
+        imageGlyphs,
+        imageGlyphSourceName: preset.name
+      });
+      setCharacterPresetMessage(`Loaded ${preset.name}`);
+    } catch (error) {
+      setCharacterPresetMessage(error instanceof Error ? error.message : "Built-in image glyph preset failed to load.");
+    } finally {
+      setLoadingImageGlyphPresetId(null);
+    }
+  };
+
   const updateCharacterSet = (charset: string) => {
     const matchingPreset = presets.find((preset) => preset.characters === charset);
     updateAscii({
@@ -650,12 +750,13 @@ export const RightSidebar = ({
   };
 
   return (
-    <motion.aside
-      initial={{ opacity: 0, x: 24 }}
-      animate={{ opacity: 1, x: 0 }}
-      transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
-      className="z-20 flex h-full w-[380px] max-w-[42vw] shrink-0 flex-col border-l border-white/[0.06] bg-panel"
-    >
+    <VisualEditingPreviewProvider value={visualEditingPreviewControls}>
+      <motion.aside
+        initial={{ opacity: 0, x: 24 }}
+        animate={{ opacity: 1, x: 0 }}
+        transition={{ duration: 0.32, ease: [0.22, 1, 0.36, 1] }}
+        className="z-20 flex h-full w-[380px] max-w-[42vw] shrink-0 flex-col border-l border-white/[0.06] bg-panel"
+      >
       <div
         className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-6 pt-5"
         style={{ scrollbarGutter: "stable" }}
@@ -1215,6 +1316,8 @@ export const RightSidebar = ({
               step={1}
               unit="%"
               resetValue={defaultImageSettings.shadows}
+              onInteractionStart={() => onToneRangePreviewChange("shadows")}
+              onInteractionEnd={() => onToneRangePreviewChange(null)}
               onChange={(shadows) => updateImage({ shadows })}
             />
             <Slider
@@ -1239,6 +1342,8 @@ export const RightSidebar = ({
               step={1}
               unit="%"
               resetValue={defaultImageSettings.midtones}
+              onInteractionStart={() => onToneRangePreviewChange("midtones")}
+              onInteractionEnd={() => onToneRangePreviewChange(null)}
               onChange={(midtones) => updateImage({ midtones })}
             />
             <Slider
@@ -1263,6 +1368,8 @@ export const RightSidebar = ({
               step={1}
               unit="%"
               resetValue={defaultImageSettings.highlights}
+              onInteractionStart={() => onToneRangePreviewChange("highlights")}
+              onInteractionEnd={() => onToneRangePreviewChange(null)}
               onChange={(highlights) => updateImage({ highlights })}
             />
             <Slider
@@ -1345,6 +1452,31 @@ export const RightSidebar = ({
           />
           {ascii.glyphMode === "images" && (
             <>
+              {selectedBuiltInImageGlyphPreset && (
+                <div className="rounded-xl border border-white/[0.06] bg-black/15 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-xs text-zinc-500">Built-in image glyph preset</div>
+                      <div className="mt-1 truncate text-sm font-medium text-zinc-200">
+                        {selectedBuiltInImageGlyphPreset.name}
+                      </div>
+                    </div>
+                    <CommandButton
+                      variant="secondary"
+                      disabled={Boolean(loadingImageGlyphPresetId)}
+                      onClick={() => {
+                        void handleBuiltInImageGlyphPreset(selectedBuiltInImageGlyphPreset.id);
+                      }}
+                    >
+                      {loadingImageGlyphPresetId === selectedBuiltInImageGlyphPreset.id
+                        ? "Loading..."
+                        : effectiveImageGlyphPresetId === selectedBuiltInImageGlyphPreset.id
+                          ? "Reload"
+                          : "Load"}
+                    </CommandButton>
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-2">
                 <CommandButton
                   variant="secondary"
@@ -1393,6 +1525,17 @@ export const RightSidebar = ({
           )}
           {ascii.glyphMode === "characters" ? (
             <>
+              {characterTypeControls}
+              <Slider
+                label="Render Resolution"
+                value={ascii.renderResolution}
+                min={1}
+                max={300}
+                step={1}
+                unit="%"
+                resetValue={defaultAsciiSettings.renderResolution}
+                onChange={(renderResolution) => updateAscii({ renderResolution })}
+              />
               <div className="flex items-end gap-2">
                 <div className="min-w-0 flex-1">
                   <Select
@@ -1531,16 +1674,6 @@ export const RightSidebar = ({
             </div>
           )}
           <Slider
-            label="Render Resolution"
-            value={ascii.renderResolution}
-            min={1}
-            max={300}
-            step={1}
-            unit="%"
-            resetValue={defaultAsciiSettings.renderResolution}
-            onChange={(renderResolution) => updateAscii({ renderResolution })}
-          />
-          <Slider
             label="Cell spacing"
             value={ascii.cellSpacing}
             min={0}
@@ -1630,46 +1763,6 @@ export const RightSidebar = ({
               }}
             />
           </label>
-        </Section>
-
-        <Section title="Type" icon={<Type size={16} />} order={4} summary={font.family}>
-          <input
-            ref={fontInputRef}
-            className="hidden"
-            type="file"
-            accept=".ttf,.otf,.woff,font/ttf,font/otf,font/woff"
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) {
-                onFontFile(file);
-              }
-              event.currentTarget.value = "";
-            }}
-          />
-          <div className="grid grid-cols-[minmax(0,1fr)_6rem_auto] items-end gap-2">
-            <div className="min-w-0">
-              <Select label="Font" value={font.family} options={fontOptions} onChange={(family) => updateFont({ family })} />
-            </div>
-            <Select label="Weight" value={String(font.weight)} options={weightOptions} onChange={(weight) => updateFont({ weight: Number(weight) })} />
-            <IconButton
-              title="Remove uploaded font"
-              disabled={!selectedUploadedFont}
-              onClick={() => {
-                if (selectedUploadedFont) {
-                  removeUploadedFont(selectedUploadedFont.id);
-                }
-              }}
-            >
-              <Trash2 size={15} />
-            </IconButton>
-          </div>
-          <CommandButton variant="secondary" onClick={() => fontInputRef.current?.click()}>
-            <Type size={16} />
-            Upload font
-          </CommandButton>
-          <Slider label="Font size" value={font.size} min={7} max={32} step={1} unit="px" resetValue={defaultFontSettings.size} onChange={(size) => updateFont({ size })} />
-          <Slider label="Line height" value={font.lineHeight} min={0.72} max={1.75} resetValue={defaultFontSettings.lineHeight} onChange={(lineHeight) => updateFont({ lineHeight })} />
-          <Slider label="Character spacing" value={font.letterSpacing} min={-2} max={8} resetValue={defaultFontSettings.letterSpacing} onChange={(letterSpacing) => updateFont({ letterSpacing })} />
         </Section>
 
         <Section title="Color" icon={<Palette size={16} />} order={8} summary={colorModeLabel}>
@@ -1941,9 +2034,9 @@ export const RightSidebar = ({
             </div>
             <IconButton
               title="Remove selected preset"
-              disabled={!selectedSettingsPreset}
+              disabled={!selectedSettingsPreset || selectedSettingsPreset.builtIn}
               onClick={() => {
-                if (!selectedSettingsPreset) {
+                if (!selectedSettingsPreset || selectedSettingsPreset.builtIn) {
                   return;
                 }
                 removeSettingsPreset(selectedSettingsPreset.id);
@@ -2032,6 +2125,7 @@ export const RightSidebar = ({
           )}
         </Section>
       </div>
-    </motion.aside>
+      </motion.aside>
+    </VisualEditingPreviewProvider>
   );
 };

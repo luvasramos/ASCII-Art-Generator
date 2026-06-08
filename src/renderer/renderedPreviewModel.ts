@@ -7,6 +7,7 @@ import type {
   FontSettings,
   FrameSettings,
   ImageSettings,
+  AnimationPreviewFormat,
   RenderedPreviewCachedFramePlaceholder,
   RenderedPreviewQuality,
   RenderedPreviewState
@@ -20,6 +21,7 @@ export type RenderedPreviewFrameSource = ImageBitmap | HTMLCanvasElement | Offsc
 export interface RenderedPreviewCacheKeyInput {
   sourceKey: string | null;
   quality: RenderedPreviewQuality;
+  previewFormat: AnimationPreviewFormat;
   animation: AnimationSettings;
   font: FontSettings;
   ascii: AsciiSettings;
@@ -39,10 +41,13 @@ export interface RenderedPreviewCachedFrame<TFrame = CacheFrameSource> extends R
 export interface RenderedPreviewCache<TFrame = CacheFrameSource> {
   key: string;
   quality: RenderedPreviewQuality;
+  previewFormat: AnimationPreviewFormat;
   fps: number;
   frameCount: number;
   width: number;
   height: number;
+  exportScale: number;
+  memoryEstimateBytes: number;
   frames: RenderedPreviewCachedFrame<TFrame>[];
   generatedAt: number;
 }
@@ -59,6 +64,7 @@ export interface RenderedPreviewRenderStart {
   fps: number;
   frameCount: number;
   quality: RenderedPreviewQuality;
+  previewFormat: AnimationPreviewFormat;
   cancelRequestId: string;
 }
 
@@ -73,6 +79,7 @@ export interface RenderedPreviewRenderFinish {
   fps: number;
   frameCount: number;
   quality: RenderedPreviewQuality;
+  previewFormat: AnimationPreviewFormat;
 }
 
 export interface RenderedPreviewPlaybackStart {
@@ -109,9 +116,13 @@ const normalizeProgress = (value: unknown) =>
 export const normalizeRenderedPreviewQuality = (quality: unknown): RenderedPreviewQuality =>
   quality === "fast" || quality === "final" ? quality : "balanced";
 
+export const normalizeAnimationPreviewFormat = (format: unknown): AnimationPreviewFormat =>
+  format === "gif" || format === "mp4" || format === "png-sequence" ? format : "webm";
+
 export const createRenderedPreviewState = (
   fps = 24,
-  quality: RenderedPreviewQuality = "balanced"
+  quality: RenderedPreviewQuality = "balanced",
+  previewFormat: AnimationPreviewFormat = "webm"
 ): RenderedPreviewState => ({
   mode: "live",
   status: "idle",
@@ -121,6 +132,7 @@ export const createRenderedPreviewState = (
   progress: 0,
   cacheKey: null,
   quality,
+  previewFormat,
   cancelRequestId: null,
   error: null
 });
@@ -153,6 +165,7 @@ export const normalizeRenderedPreviewState = (value: unknown, fallbackFps = 24):
     progress: normalizeProgress(value.progress),
     cacheKey: typeof value.cacheKey === "string" && value.cacheKey.trim() ? value.cacheKey : null,
     quality: normalizeRenderedPreviewQuality(value.quality),
+    previewFormat: normalizeAnimationPreviewFormat(value.previewFormat),
     cancelRequestId:
       typeof value.cancelRequestId === "string" && value.cancelRequestId.trim() ? value.cancelRequestId : null,
     error: typeof value.error === "string" && value.error.trim() ? value.error : null
@@ -173,7 +186,7 @@ export const clearRenderedPreviewCacheState = (
   state: RenderedPreviewState,
   fps = state.fps
 ): RenderedPreviewState => ({
-  ...createRenderedPreviewState(fps, state.quality),
+  ...createRenderedPreviewState(fps, state.quality, state.previewFormat),
   mode: state.mode
 });
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Download, Maximize2, Minus, Pause, Play, Plus, Redo2, RotateCcw, Undo2, X } from "lucide-react";
+import { Maximize2, Minus, Pause, Play, Plus, Redo2, RotateCcw, Undo2, X } from "lucide-react";
 import { createGlyphAtlas } from "../atlas/glyphAtlas";
 import { createImageGlyphAtlas, type ImageGlyphAtlas } from "../atlas/imageGlyphAtlas";
 import { normalizeCharacterSet } from "../ascii/charset";
@@ -9,9 +9,13 @@ import type { AnimatedImageRenderer } from "../processing/animateImage";
 import { renderAsciiLayers } from "../renderer/layeredCanvasRenderer";
 import { scaleFontForRenderResolution } from "../renderer/geometry";
 import { normalizeAnimationFps } from "../renderer/animationTiming";
-import { useAnimatedAsciiPreview, type LivePreviewStats } from "../renderer/useAnimatedAsciiPreview";
+import {
+  estimateInitialLivePreviewScale,
+  useAnimatedAsciiPreview,
+  type LivePreviewStats
+} from "../renderer/useAnimatedAsciiPreview";
 import { useRenderedAnimationPlayback } from "../renderer/useRenderedAnimationPlayback";
-import { useRenderedAnimationPreview } from "../renderer/useRenderedAnimationPreview";
+import { getRenderedPreviewCache, useRenderedAnimationPreview } from "../renderer/useRenderedAnimationPreview";
 import type {
   AnimationSettings,
   AsciiSettings,
@@ -22,10 +26,12 @@ import type {
   FrameSettings,
   GlyphMetric,
   ImageSettings,
+  AnimationPreviewFormat,
+  LivePreviewOptimizationLevel,
   RenderGrid,
-  RenderedPreviewQuality,
   RenderedPreviewState,
   ToneRangePreview,
+  VisualEditPreviewState,
   VideoPlaybackState
 } from "../renderer/types";
 import { useStudioStore } from "../state/useStudioStore";
@@ -47,7 +53,6 @@ interface StudioCanvasProps {
   glyphMetrics: GlyphMetric[];
   isProcessing: boolean;
   rendererWarning: string | null;
-  status: string;
   onMediaFile: (file: File) => void;
   videoPlayback: VideoPlaybackState;
   onToggleVideoPlayback: () => void;
@@ -57,9 +62,7 @@ interface StudioCanvasProps {
   animateStillImageActive: boolean;
   onAnimationPerformanceWarning: (message: string) => void;
   toneRangePreview: ToneRangePreview | null;
-  onExportAnimation?: () => void;
-  isExportingVideo?: boolean;
-  videoExportProgress?: number;
+  visualEditPreview: VisualEditPreviewState;
 }
 
 const formatTime = (seconds: number) => {
@@ -77,6 +80,7 @@ const MAX_ZOOM = 4;
 const ZOOM_STEP = 1.18;
 const AUTO_FIT_SCALE_CHANGE_THRESHOLD = 0.15;
 const AUTO_FIT_SCALE_COOLDOWN_MS = 750;
+const PAN_ADJUST_THRESHOLD_PX = 2;
 
 const clampZoom = (value: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
 
@@ -89,8 +93,29 @@ const waitForBrowserFrame = () =>
     globalThis.setTimeout(resolve, 0);
   });
 
-const renderedPreviewQualityLabel = (quality: RenderedPreviewQuality) =>
+const renderedPreviewQualityLabel = (quality: string) =>
   quality === "fast" ? "Fast" : quality === "final" ? "Final Quality" : "Balanced";
+
+const livePreviewOptimizationOptions: Array<{ value: LivePreviewOptimizationLevel; label: string }> = [
+  { value: "super-fast", label: "Super Fast" },
+  { value: "fast", label: "Fast" },
+  { value: "balanced", label: "Balanced" },
+  { value: "high", label: "High" },
+  { value: "off", label: "Off" }
+];
+
+const livePreviewOptimizationLabel = (level: LivePreviewOptimizationLevel) =>
+  livePreviewOptimizationOptions.find((option) => option.value === level)?.label ?? "Balanced";
+
+const animationPreviewFormatOptions: Array<{ value: AnimationPreviewFormat; label: string }> = [
+  { value: "webm", label: "WebM" },
+  { value: "gif", label: "GIF" },
+  { value: "mp4", label: "MP4" },
+  { value: "png-sequence", label: "PNG Seq" }
+];
+
+const animationPreviewFormatLabel = (format: AnimationPreviewFormat) =>
+  animationPreviewFormatOptions.find((option) => option.value === format)?.label ?? "WebM";
 
 const getRenderedPreviewCompletedFrameCount = (preview: RenderedPreviewState) => {
   const frameCount = Math.max(0, preview.frameCount);
@@ -111,14 +136,14 @@ const renderedPreviewStatusText = (preview: RenderedPreviewState) => {
   switch (preview.status) {
     case "rendering":
       return frameCount > 0
-        ? `Rendering frame ${completedFrames} / ${frameCount} · ${qualityLabel}`
-        : `Rendering preview · ${qualityLabel}`;
+        ? `Rendering frame ${completedFrames} / ${frameCount} - ${qualityLabel}`
+        : `Rendering preview - ${qualityLabel}`;
     case "ready":
-      return `Preview ready · ${qualityLabel}`;
+      return `Preview ready - ${qualityLabel}`;
     case "playing":
-      return `Playing at ${preview.fps} fps · ${qualityLabel}`;
+      return `Playing at ${preview.fps} fps - ${qualityLabel}`;
     case "paused":
-      return `Paused · ${qualityLabel}`;
+      return `Paused - ${qualityLabel}`;
     case "stale":
       return "Preview is outdated";
     case "error":
@@ -134,12 +159,34 @@ const livePreviewStatusText = (
   paused: boolean,
   targetFps: number,
   stats: LivePreviewStats | null,
-  grid: RenderGrid | null
+  grid: RenderGrid | null,
+  optimizationLabel: string
 ) => {
   const previewWidth = Math.max(1, Math.round(stats?.previewWidth ?? grid?.width ?? 1));
   const previewHeight = Math.max(1, Math.round(stats?.previewHeight ?? grid?.height ?? 1));
   const outputWidth = Math.max(1, Math.round(stats?.outputWidth ?? grid?.width ?? 1));
   const outputHeight = Math.max(1, Math.round(stats?.outputHeight ?? grid?.height ?? 1));
+  const outputDimensionsText = `Output ${outputWidth}x${outputHeight}`;
+  const outputText = `${optimizationLabel} - ${outputDimensionsText}`;
+  if (optimizationLabel === "Off") {
+    if (!active) {
+      return "Live Preview";
+    }
+    if (stats?.phase === "updating") {
+      return `Updating preview... - ${outputText}`;
+    }
+    if (stats?.phase === "optimizing") {
+      return `Live preview optimization off - ${outputDimensionsText}`;
+    }
+    if (paused) {
+      return `Live paused - target ${targetFps} - ${outputText}`;
+    }
+    if (!stats) {
+      return `Live target ${targetFps} - ${outputText}`;
+    }
+    const actualFps = Math.max(0, Math.round(stats.actualFps));
+    return `Live ${actualFps}/${stats.targetFps} fps - ${outputText}`;
+  }
   const sourceText =
     stats && stats.sourceScale < 0.999
       ? ` - Source ${Math.max(1, Math.round(stats.sourceScale * 100))}%`
@@ -154,9 +201,21 @@ const livePreviewStatusText = (
         ? "Cached - "
         : `Cache ${stats.cacheFrames}/${stats.cacheFrameCount} - `
       : "";
-  const sizeText = `${cacheText}Preview ${previewWidth}x${previewHeight}${sourceText}${stripText} - Output ${outputWidth}x${outputHeight}`;
+  const sizeText = `${optimizationLabel} - ${cacheText}Preview ${previewWidth}x${previewHeight}${sourceText}${stripText} - Output ${outputWidth}x${outputHeight}`;
   if (!active) {
     return "Live Preview";
+  }
+  if (stats?.phase === "updating") {
+    return `Updating preview... - ${sizeText}`;
+  }
+  if (stats?.phase === "optimizing") {
+    if (stats.cacheEnabled && stats.cacheFrameCount > 1 && stats.cacheFrames > 0 && !stats.cacheComplete) {
+      return `Caching live preview ${stats.cacheFrames}/${stats.cacheFrameCount}... - ${optimizationLabel}`;
+    }
+    return `Optimizing live preview... - ${optimizationLabel}`;
+  }
+  if (stats?.phase === "testing") {
+    return `Testing better preview... - ${sizeText}`;
   }
   if (paused) {
     return `Live paused - target ${targetFps} - ${sizeText}`;
@@ -184,7 +243,6 @@ export const StudioCanvas = ({
   glyphMetrics,
   isProcessing,
   rendererWarning,
-  status,
   onMediaFile,
   videoPlayback,
   onToggleVideoPlayback,
@@ -194,9 +252,7 @@ export const StudioCanvas = ({
   animateStillImageActive,
   onAnimationPerformanceWarning,
   toneRangePreview,
-  onExportAnimation,
-  isExportingVideo = false,
-  videoExportProgress = 0
+  visualEditPreview
 }: StudioCanvasProps) => {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const backgroundCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -212,46 +268,126 @@ export const StudioCanvas = ({
     height: number;
     lastFitAt: number;
   } | null>(null);
+  const userAdjustedViewportRef = useRef(false);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragActive, setDragActive] = useState(false);
-  const [renderedPreviewOpen, setRenderedPreviewOpen] = useState(false);
   const [livePreviewStats, setLivePreviewStats] = useState<LivePreviewStats | null>(null);
+  const [stableLivePreviewStats, setStableLivePreviewStats] = useState<LivePreviewStats | null>(null);
   const [livePreviewPlaying, setLivePreviewPlaying] = useState(true);
   const [imageGlyphAtlas, setImageGlyphAtlas] = useState<ImageGlyphAtlas | null>(null);
-  const pointerRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null);
-  const { undoStack, redoStack, undo, redo, renderedPreview, markRenderedPreviewStale } = useStudioStore();
+  const pointerRef = useRef<{ x: number; y: number; panX: number; panY: number; hasMoved: boolean } | null>(null);
+  const {
+    undoStack,
+    redoStack,
+    undo,
+    redo,
+    renderedPreview,
+    livePreviewOptimizationLevel,
+    markRenderedPreviewStale,
+    setAnimationPreviewMode,
+    setLivePreviewOptimizationLevel,
+    setAnimationPreviewFormat
+  } = useStudioStore();
   const canPreviewAnimation = animateStillImageActive && Boolean(animatedImageRenderer) && Boolean(grid);
   const renderedPreviewProgress = Math.min(1, Math.max(0, renderedPreview.progress));
   const renderedPreviewFrameCount = Math.max(0, renderedPreview.frameCount);
   const renderedPreviewRenderedFrames = getRenderedPreviewCompletedFrameCount(renderedPreview);
-  const renderedPreviewLabel = renderedPreviewStatusText(renderedPreview);
+  const renderedPreviewCache = getRenderedPreviewCache(renderedPreview.cacheKey);
   const renderedPreviewCanUseCache =
     Boolean(renderedPreview.cacheKey) &&
+    Boolean(renderedPreviewCache) &&
+    renderedPreviewCache?.previewFormat === renderedPreview.previewFormat &&
+    renderedPreview.quality === "final" &&
     renderedPreview.frameCount > 0 &&
     (renderedPreview.status === "ready" || renderedPreview.status === "playing" || renderedPreview.status === "paused");
-  const canExportFromRenderedPreview =
-    Boolean(onExportAnimation) &&
-    renderedPreviewCanUseCache;
-  const livePreviewPaused = animateStillImageActive && !livePreviewPlaying;
-  const livePreviewTargetFps = normalizeAnimationFps(animation.fps);
-  const livePreviewLabel = livePreviewStatusText(
-    animateStillImageActive,
-    livePreviewPaused,
-    livePreviewTargetFps,
-    livePreviewStats,
-    grid
+  const renderedPreviewFormatLabel = animationPreviewFormatLabel(renderedPreview.previewFormat);
+  const inlineFinalPreviewActive =
+    renderedPreview.mode === "rendered" &&
+    renderedPreview.quality === "final" &&
+    renderedPreview.status !== "idle";
+  const inlineFinalPreviewRendering = inlineFinalPreviewActive && renderedPreview.status === "rendering";
+  const inlineFinalPreviewVisible =
+    inlineFinalPreviewActive &&
+    Boolean(renderedPreviewCache) &&
+    (renderedPreview.status === "ready" || renderedPreview.status === "playing" || renderedPreview.status === "paused");
+  const inlineFinalPreviewStatusVisible =
+    inlineFinalPreviewActive &&
+    (inlineFinalPreviewRendering ||
+      inlineFinalPreviewVisible ||
+      renderedPreview.status === "stale" ||
+      renderedPreview.status === "error");
+  const finalPreviewWidth = Math.max(
+    1,
+    Math.round(renderedPreviewCache?.width ?? (grid ? grid.width * exportScale : 1))
   );
+  const finalPreviewHeight = Math.max(
+    1,
+    Math.round(renderedPreviewCache?.height ?? (grid ? grid.height * exportScale : 1))
+  );
+  const visualEditPreviewActive = visualEditPreview.isActive;
+  const editPreviewActive = visualEditPreviewActive || Boolean(toneRangePreview);
+  const finalQualityStaticPreviewActive =
+    animateStillImageActive && !inlineFinalPreviewActive && !livePreviewPlaying;
+  const livePreviewOptimizing =
+    animateStillImageActive &&
+    !inlineFinalPreviewActive &&
+    livePreviewPlaying &&
+    (!livePreviewStats || livePreviewStats.phase === "optimizing");
+  const displayedLivePreviewStats =
+    livePreviewOptimizationLevel !== "off" && livePreviewOptimizing && stableLivePreviewStats
+      ? stableLivePreviewStats
+      : livePreviewStats;
+  const livePreviewPaused =
+    animateStillImageActive &&
+    (!livePreviewPlaying ||
+      inlineFinalPreviewRendering ||
+      inlineFinalPreviewVisible ||
+      renderedPreview.status === "stale" ||
+      renderedPreview.status === "error");
+  const livePreviewTargetFps = normalizeAnimationFps(animation.fps);
+  const livePreviewOptimizationName = livePreviewOptimizationLabel(livePreviewOptimizationLevel);
+  const livePreviewLabel = finalQualityStaticPreviewActive
+    ? `Paused - Final quality - Output ${Math.max(1, Math.round(grid?.width ?? 1))}x${Math.max(1, Math.round(grid?.height ?? 1))}`
+    : visualEditPreviewActive
+    ? visualEditPreview.pendingReturnToLivePreview
+      ? "Updating final preview..."
+      : "Editing preview - Final quality"
+    : livePreviewStatusText(
+        animateStillImageActive,
+        livePreviewPaused,
+        livePreviewTargetFps,
+        livePreviewStats,
+        grid,
+        livePreviewOptimizationName
+      );
+  const initialLivePreviewScale = grid
+    ? estimateInitialLivePreviewScale(grid.width, grid.height, livePreviewTargetFps, livePreviewOptimizationLevel)
+    : 1;
   const visibleCanvasWidth = grid
-    ? animateStillImageActive
-      ? Math.max(1, Math.round(livePreviewStats?.previewWidth ?? grid.width))
+    ? inlineFinalPreviewActive
+      ? finalPreviewWidth
+      : finalQualityStaticPreviewActive || (livePreviewOptimizing && !stableLivePreviewStats)
+      ? grid.width
+      : animateStillImageActive
+      ? Math.max(1, Math.round(displayedLivePreviewStats?.previewWidth ?? grid.width * initialLivePreviewScale))
       : grid.width
     : 1;
   const visibleCanvasHeight = grid
-    ? animateStillImageActive
-      ? Math.max(1, Math.round(livePreviewStats?.previewHeight ?? grid.height))
+    ? inlineFinalPreviewActive
+      ? finalPreviewHeight
+      : finalQualityStaticPreviewActive || (livePreviewOptimizing && !stableLivePreviewStats)
+      ? grid.height
+      : animateStillImageActive
+      ? Math.max(1, Math.round(displayedLivePreviewStats?.previewHeight ?? grid.height * initialLivePreviewScale))
       : grid.height
     : 1;
+  const livePreviewTransitioning =
+    animateStillImageActive &&
+    !inlineFinalPreviewActive &&
+    !finalQualityStaticPreviewActive &&
+    !editPreviewActive &&
+    (!livePreviewStats || livePreviewStats.phase === "optimizing" || livePreviewStats.phase === "updating");
 
   const {
     generate: generateRenderedPreview,
@@ -269,12 +405,14 @@ export const StudioCanvas = ({
     exportScale,
     glyphMetrics,
     animation,
-    quality: renderedPreview.quality
+    quality: "final",
+    previewFormat: renderedPreview.previewFormat
   });
   const {
     play: playRenderedPreview,
     pause: pauseRenderedPreview,
-    stop: stopRenderedPreview
+    stop: stopRenderedPreview,
+    drawFrame: drawRenderedPreviewFrame
   } = useRenderedAnimationPlayback({
     canvasRef: renderedPreviewCanvasRef,
     loop: true
@@ -284,7 +422,8 @@ export const StudioCanvas = ({
     if (!canPreviewAnimation) {
       return;
     }
-    setRenderedPreviewOpen(true);
+    setAnimationPreviewMode("rendered");
+    setLivePreviewPlaying(false);
     stopRenderedPreview();
     await waitForBrowserFrame();
     const cache = await generateRenderedPreview();
@@ -292,52 +431,88 @@ export const StudioCanvas = ({
       await waitForBrowserFrame();
       playRenderedPreview({ restart: true });
     }
-  }, [canPreviewAnimation, generateRenderedPreview, playRenderedPreview, stopRenderedPreview]);
+  }, [
+    canPreviewAnimation,
+    generateRenderedPreview,
+    playRenderedPreview,
+    setAnimationPreviewMode,
+    stopRenderedPreview
+  ]);
 
-  const closeRenderedPreview = useCallback(() => {
+  const backToLivePreview = useCallback(() => {
     if (renderedPreview.status === "rendering") {
       cancelRenderedPreviewRender();
     }
     stopRenderedPreview();
-    setRenderedPreviewOpen(false);
-  }, [cancelRenderedPreviewRender, renderedPreview.status, stopRenderedPreview]);
+    setAnimationPreviewMode("live");
+    setLivePreviewPlaying(true);
+  }, [cancelRenderedPreviewRender, renderedPreview.status, setAnimationPreviewMode, stopRenderedPreview]);
 
   const cancelRenderedPreview = useCallback(() => {
     cancelRenderedPreviewRender();
     stopRenderedPreview();
-    setRenderedPreviewOpen(false);
-  }, [cancelRenderedPreviewRender, stopRenderedPreview]);
+    setAnimationPreviewMode("live");
+    setLivePreviewPlaying(true);
+  }, [cancelRenderedPreviewRender, setAnimationPreviewMode, stopRenderedPreview]);
 
   const replayRenderedPreview = useCallback(() => {
+    setAnimationPreviewMode("rendered");
     playRenderedPreview({ restart: true });
-  }, [playRenderedPreview]);
+  }, [playRenderedPreview, setAnimationPreviewMode]);
 
   const resumeRenderedPreview = useCallback(() => {
+    setAnimationPreviewMode("rendered");
     playRenderedPreview();
-  }, [playRenderedPreview]);
-
-  const exportRenderedPreviewAnimation = useCallback(() => {
-    if (!canExportFromRenderedPreview || isExportingVideo) {
-      return;
-    }
-    onExportAnimation?.();
-  }, [canExportFromRenderedPreview, isExportingVideo, onExportAnimation]);
+  }, [playRenderedPreview, setAnimationPreviewMode]);
 
   const handleLivePreviewStats = useCallback((stats: LivePreviewStats | null) => {
     setLivePreviewStats(stats);
+    if (!stats) {
+      setStableLivePreviewStats(null);
+      return;
+    }
+    if (stats.phase === "live") {
+      setStableLivePreviewStats(stats);
+    }
   }, []);
 
   useEffect(() => {
+    if (!inlineFinalPreviewVisible || renderedPreview.status === "playing") {
+      return;
+    }
+    try {
+      drawRenderedPreviewFrame(renderedPreview.currentFrame);
+    } catch {
+      // Playback hook reports detailed canvas/cache failures through rendered preview state.
+    }
+  }, [
+    drawRenderedPreviewFrame,
+    inlineFinalPreviewVisible,
+    renderedPreview.currentFrame,
+    renderedPreview.status
+  ]);
+
+  useEffect(() => {
     setLivePreviewPlaying(true);
+    setLivePreviewStats(null);
+    setStableLivePreviewStats(null);
   }, [
     animateStillImageActive,
-    mediaKey,
-    animation.type
+    mediaKey
+  ]);
+
+  useEffect(() => {
+    setLivePreviewPlaying(true);
+    setLivePreviewStats(null);
+  }, [
+    animation.type,
+    livePreviewOptimizationLevel
   ]);
 
   useEffect(() => {
     if (!animateStillImageActive) {
       setLivePreviewStats(null);
+      setStableLivePreviewStats(null);
     }
   }, [
     animateStillImageActive
@@ -413,7 +588,23 @@ export const StudioCanvas = ({
       x: reservedLeft + (availableWidth - fitWidth * nextZoom) / 2,
       y: (rect.height - fitHeight * nextZoom) / 2
     });
-  }, [grid, visibleCanvasHeight, visibleCanvasWidth]);
+    userAdjustedViewportRef.current = false;
+    autoFitRef.current = {
+      mediaKey,
+      frameFitKey,
+      animated: animateStillImageActive,
+      width: Math.max(1, Math.round(visibleCanvasWidth)),
+      height: Math.max(1, Math.round(visibleCanvasHeight)),
+      lastFitAt: performance.now()
+    };
+  }, [
+    animateStillImageActive,
+    frameFitKey,
+    grid,
+    mediaKey,
+    visibleCanvasHeight,
+    visibleCanvasWidth
+  ]);
 
   const zoomAtPoint = useCallback((localX: number, localY: number, resolveZoom: (zoom: number) => number) => {
     setZoom((currentZoom) => {
@@ -438,6 +629,11 @@ export const StudioCanvas = ({
     const rect = viewportRef.current.getBoundingClientRect();
     zoomAtPoint(rect.width / 2, rect.height / 2, (value) => value * factor);
   }, [zoomAtPoint]);
+
+  const userZoomFromCenter = useCallback((factor: number) => {
+    userAdjustedViewportRef.current = true;
+    zoomFromCenter(factor);
+  }, [zoomFromCenter]);
 
   useEffect(() => {
     const isEditableTarget = (target: EventTarget | null) => {
@@ -464,20 +660,27 @@ export const StudioCanvas = ({
 
       if (event.key === "]") {
         event.preventDefault();
-        zoomFromCenter(ZOOM_STEP);
+        userZoomFromCenter(ZOOM_STEP);
       } else if (event.key === "[") {
         event.preventDefault();
-        zoomFromCenter(1 / ZOOM_STEP);
+        userZoomFromCenter(1 / ZOOM_STEP);
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [fitToView, zoomFromCenter]);
+  }, [fitToView, userZoomFromCenter]);
 
   useEffect(() => {
+    const shouldRenderStaticPreview =
+      !inlineFinalPreviewActive &&
+      (!animateStillImageActive ||
+        finalQualityStaticPreviewActive ||
+        (livePreviewOptimizing && !stableLivePreviewStats) ||
+        livePreviewStats?.phase === "updating" ||
+        editPreviewActive);
     if (
-      animateStillImageActive ||
+      !shouldRenderStaticPreview ||
       !grid ||
       !atlas ||
       !backgroundCanvasRef.current ||
@@ -493,13 +696,36 @@ export const StudioCanvas = ({
       imageGlyphAtlas,
       font,
       ascii,
-      color
+      color,
+      exportOptions: finalQualityStaticPreviewActive ? exportOptions : undefined
     });
-  }, [animateStillImageActive, ascii, atlas, color, font, grid, imageGlyphAtlas]);
+    backgroundCanvasRef.current.style.width = `${Math.max(1, Math.round(visibleCanvasWidth))}px`;
+    backgroundCanvasRef.current.style.height = `${Math.max(1, Math.round(visibleCanvasHeight))}px`;
+    glyphCanvasRef.current.style.width = `${Math.max(1, Math.round(visibleCanvasWidth))}px`;
+    glyphCanvasRef.current.style.height = `${Math.max(1, Math.round(visibleCanvasHeight))}px`;
+  }, [
+    animateStillImageActive,
+    ascii,
+    atlas,
+    color,
+    font,
+    grid,
+    imageGlyphAtlas,
+    editPreviewActive,
+    exportOptions,
+    finalQualityStaticPreviewActive,
+    inlineFinalPreviewActive,
+    livePreviewOptimizing,
+    livePreviewStats?.phase,
+    stableLivePreviewStats,
+    visibleCanvasHeight,
+    visibleCanvasWidth
+  ]);
 
   useAnimatedAsciiPreview({
     active: animateStillImageActive,
     paused: livePreviewPaused,
+    editPreviewActive,
     renderer: animatedImageRenderer,
     sourceImageData: livePreviewSourceImageData,
     backgroundCanvasRef,
@@ -514,6 +740,7 @@ export const StudioCanvas = ({
     breakup,
     color,
     animation,
+    optimizationLevel: livePreviewOptimizationLevel,
     glyphMetrics,
     onPerformanceWarning: onAnimationPerformanceWarning,
     onLivePreviewStats: handleLivePreviewStats
@@ -521,33 +748,48 @@ export const StudioCanvas = ({
 
   useEffect(() => {
     const canvas = tonePreviewCanvasRef.current;
-    if (!canvas || !grid || !toneRangePreview) {
+    if (!canvas) {
       return;
     }
 
-    const width = Math.max(1, Math.ceil(grid.width));
-    const height = Math.max(1, Math.ceil(grid.height));
-    if (canvas.width !== width) {
-      canvas.width = width;
+    const renderWidth = Math.max(1, Math.round(grid?.width ?? visibleCanvasWidth));
+    const renderHeight = Math.max(1, Math.round(grid?.height ?? visibleCanvasHeight));
+    const displayWidth = Math.max(1, Math.round(visibleCanvasWidth));
+    const displayHeight = Math.max(1, Math.round(visibleCanvasHeight));
+    if (canvas.width !== renderWidth) {
+      canvas.width = renderWidth;
     }
-    if (canvas.height !== height) {
-      canvas.height = height;
+    if (canvas.height !== renderHeight) {
+      canvas.height = renderHeight;
     }
+    canvas.style.width = `${displayWidth}px`;
+    canvas.style.height = `${displayHeight}px`;
 
     const ctx = canvas.getContext("2d");
     if (!ctx) {
       return;
     }
 
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = "rgba(0, 0, 0, 0.72)";
-    ctx.fillRect(0, 0, width, height);
-    ctx.fillStyle = "#ffffff";
+    ctx.clearRect(0, 0, renderWidth, renderHeight);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+
+    if (!grid || !toneRangePreview) {
+      return;
+    }
 
     const stepX = grid.cellWidth + grid.gapX;
     const stepY = grid.cellHeight + grid.gapY;
-    const cellWidth = grid.gapX > 0 ? grid.cellWidth : grid.cellWidth + 0.5;
-    const cellHeight = grid.gapY > 0 ? grid.cellHeight : grid.cellHeight + 0.5;
+    const baseCellWidth = grid.gapX > 0 ? grid.cellWidth : grid.cellWidth + 0.5;
+    const baseCellHeight = grid.gapY > 0 ? grid.cellHeight : grid.cellHeight + 0.5;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, renderWidth, renderHeight);
+    ctx.clip();
+    ctx.fillStyle = "rgba(0, 0, 0, 0.72)";
+    ctx.fillRect(0, 0, renderWidth, renderHeight);
+    ctx.fillStyle = "#ffffff";
 
     for (const cell of grid.cells) {
       if (cell.alpha <= 0.01 || cell.coverage <= 0.01) {
@@ -558,20 +800,33 @@ export const StudioCanvas = ({
       if (weight <= 0.004) {
         continue;
       }
+      const x = grid.gapX > 0 ? cell.x * stepX : Math.round(cell.x * stepX);
+      const y = grid.gapY > 0 ? cell.y * stepY : Math.round(cell.y * stepY);
+      const cellWidth = grid.gapX > 0 ? baseCellWidth : Math.ceil(baseCellWidth);
+      const cellHeight = grid.gapY > 0 ? baseCellHeight : Math.ceil(baseCellHeight);
+      const drawWidth = Math.max(0, Math.min(cellWidth, renderWidth - x));
+      const drawHeight = Math.max(0, Math.min(cellHeight, renderHeight - y));
+      if (drawWidth <= 0 || drawHeight <= 0) {
+        continue;
+      }
       ctx.globalAlpha = Math.min(1, weight * Math.min(1, cell.alpha * 1.15));
-      ctx.fillRect(
-        grid.gapX > 0 ? cell.x * stepX : Math.round(cell.x * stepX),
-        grid.gapY > 0 ? cell.y * stepY : Math.round(cell.y * stepY),
-        grid.gapX > 0 ? cellWidth : Math.ceil(cellWidth),
-        grid.gapY > 0 ? cellHeight : Math.ceil(cellHeight)
-      );
+      ctx.fillRect(x, y, drawWidth, drawHeight);
     }
+    ctx.restore();
     ctx.globalAlpha = 1;
-  }, [grid, image, toneRangePreview]);
+  }, [
+    animateStillImageActive,
+    grid,
+    image,
+    toneRangePreview,
+    visibleCanvasHeight,
+    visibleCanvasWidth
+  ]);
 
   useEffect(() => {
     if (!grid) {
       autoFitRef.current = null;
+      userAdjustedViewportRef.current = false;
       return;
     }
 
@@ -582,6 +837,9 @@ export const StudioCanvas = ({
     const mediaChanged = previous?.mediaKey !== mediaKey;
     const frameChanged = previous?.frameFitKey !== frameFitKey;
     const animationModeChanged = previous?.animated !== animateStillImageActive;
+    if (mediaChanged) {
+      userAdjustedViewportRef.current = false;
+    }
     const widthChange = previous ? Math.abs(width - previous.width) / Math.max(1, previous.width) : 1;
     const heightChange = previous ? Math.abs(height - previous.height) / Math.max(1, previous.height) : 1;
     const meaningfulSizeChange = Math.max(widthChange, heightChange) >= AUTO_FIT_SCALE_CHANGE_THRESHOLD;
@@ -597,16 +855,20 @@ export const StudioCanvas = ({
       return;
     }
 
-    const frame = window.requestAnimationFrame(() => {
-      fitToView();
+    if (userAdjustedViewportRef.current) {
       autoFitRef.current = {
         mediaKey,
         frameFitKey,
         animated: animateStillImageActive,
         width,
         height,
-        lastFitAt: performance.now()
+        lastFitAt: previous?.lastFitAt ?? now
       };
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      fitToView();
     });
     return () => window.cancelAnimationFrame(frame);
   }, [
@@ -628,6 +890,7 @@ export const StudioCanvas = ({
     const localX = event.clientX - rect.left;
     const localY = event.clientY - rect.top;
     const factor = event.deltaY > 0 ? 0.9 : 1.1;
+    userAdjustedViewportRef.current = true;
     zoomAtPoint(localX, localY, (value) => value * factor);
   };
 
@@ -637,7 +900,8 @@ export const StudioCanvas = ({
       x: event.clientX,
       y: event.clientY,
       panX: pan.x,
-      panY: pan.y
+      panY: pan.y,
+      hasMoved: false
     };
   };
 
@@ -645,9 +909,18 @@ export const StudioCanvas = ({
     if (!pointerRef.current) {
       return;
     }
+    const deltaX = event.clientX - pointerRef.current.x;
+    const deltaY = event.clientY - pointerRef.current.y;
+    if (
+      !pointerRef.current.hasMoved &&
+      Math.hypot(deltaX, deltaY) >= PAN_ADJUST_THRESHOLD_PX
+    ) {
+      pointerRef.current.hasMoved = true;
+      userAdjustedViewportRef.current = true;
+    }
     setPan({
-      x: pointerRef.current.panX + event.clientX - pointerRef.current.x,
-      y: pointerRef.current.panY + event.clientY - pointerRef.current.y
+      x: pointerRef.current.panX + deltaX,
+      y: pointerRef.current.panY + deltaY
     });
   };
 
@@ -697,11 +970,11 @@ export const StudioCanvas = ({
           <IconButton title="Redo (Ctrl/Cmd+Shift+Z)" disabled={!redoStack.length} onClick={redo}>
             <Redo2 size={16} />
           </IconButton>
-          <IconButton title="Zoom out (Ctrl/Cmd+[)" onClick={() => zoomFromCenter(1 / ZOOM_STEP)}>
+          <IconButton title="Zoom out (Ctrl/Cmd+[)" onClick={() => userZoomFromCenter(1 / ZOOM_STEP)}>
             <Minus size={16} />
           </IconButton>
           <div className="min-w-14 text-center text-xs tabular-nums text-zinc-400">{Math.round(zoom * 100)}%</div>
-          <IconButton title="Zoom in (Ctrl/Cmd+])" onClick={() => zoomFromCenter(ZOOM_STEP)}>
+          <IconButton title="Zoom in (Ctrl/Cmd+])" onClick={() => userZoomFromCenter(ZOOM_STEP)}>
             <Plus size={16} />
           </IconButton>
           <IconButton title="Fit Canvas (F)" onClick={fitToView}>
@@ -746,19 +1019,89 @@ export const StudioCanvas = ({
           >
             <canvas
               ref={backgroundCanvasRef}
-              className={`absolute inset-0 ${font.smoothing ? "" : "[image-rendering:pixelated]"}`}
+              className={`absolute inset-0 transition-[filter,opacity] duration-150 ${
+                inlineFinalPreviewActive ? "hidden" : ""
+              } ${
+                font.smoothing ? "" : "[image-rendering:pixelated]"
+              }`}
+              style={{
+                filter: livePreviewTransitioning ? "blur(1px)" : "none",
+                opacity: livePreviewTransitioning ? 0.76 : 1
+              }}
             />
             <canvas
               ref={glyphCanvasRef}
-              className={`absolute inset-0 ${font.smoothing ? "" : "[image-rendering:pixelated]"}`}
+              className={`absolute inset-0 transition-[filter,opacity] duration-150 ${
+                inlineFinalPreviewActive ? "hidden" : ""
+              } ${
+                font.smoothing ? "" : "[image-rendering:pixelated]"
+              }`}
+              style={{
+                filter: livePreviewTransitioning ? "blur(1px)" : "none",
+                opacity: livePreviewTransitioning ? 0.76 : 1
+              }}
             />
-            {toneRangePreview && (
-              <canvas
-                ref={tonePreviewCanvasRef}
-                className="pointer-events-none absolute inset-0"
-              />
+            <canvas
+              ref={tonePreviewCanvasRef}
+              className={`pointer-events-none absolute inset-0 ${
+                toneRangePreview && !inlineFinalPreviewActive ? "" : "hidden"
+              }`}
+            />
+            <canvas
+              ref={renderedPreviewCanvasRef}
+              className={`absolute left-0 top-0 ${
+                inlineFinalPreviewVisible ? "" : "hidden"
+              } ${font.smoothing ? "" : "[image-rendering:pixelated]"}`}
+              style={{
+                width: finalPreviewWidth,
+                height: finalPreviewHeight
+              }}
+            />
+            {livePreviewTransitioning && (
+              <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/20 backdrop-blur-[1px]">
+                <div className="rounded-xl border border-white/[0.08] bg-black/45 px-3 py-2 text-xs font-medium text-zinc-200 shadow-xl">
+                  {livePreviewStats?.phase === "updating" ? "Updating preview..." : livePreviewLabel}
+                </div>
+              </div>
+            )}
+            {inlineFinalPreviewActive && renderedPreview.status === "error" && (
+              <div className="pointer-events-none absolute inset-0 grid place-items-center bg-black/35">
+                <div className="mx-4 max-w-md rounded-2xl border border-red-400/30 bg-panel/95 p-4 text-center text-sm text-red-100 shadow-2xl">
+                  {renderedPreview.error ?? "Final preview failed."}
+                </div>
+              </div>
             )}
           </motion.div>
+        )}
+
+        {inlineFinalPreviewRendering && (
+          <div className="pointer-events-none absolute inset-0 z-30 grid place-items-center px-6">
+            <div
+              className="pointer-events-auto w-[min(420px,calc(100vw-48px))] rounded-2xl border border-white/[0.08] bg-panel/95 p-5 text-sm shadow-2xl backdrop-blur"
+              style={{ minWidth: "min(300px, calc(100vw - 48px))" }}
+            >
+              <div className="text-base font-semibold text-zinc-100">Rendering final preview...</div>
+              <div className="mt-3 flex items-center justify-between gap-4 text-sm text-zinc-400">
+                <span>
+                  Frame {renderedPreviewRenderedFrames} of {renderedPreviewFrameCount}
+                </span>
+                <span className="tabular-nums text-zinc-300">{Math.round(renderedPreviewProgress * 100)}%</span>
+              </div>
+              <div className="mt-4 h-2.5 overflow-hidden rounded-full bg-white/[0.06]">
+                <div
+                  className="h-full rounded-full bg-signal transition-[width] duration-150"
+                  style={{ width: `${Math.round(renderedPreviewProgress * 100)}%` }}
+                />
+              </div>
+              <button
+                type="button"
+                className="mt-5 h-10 rounded-xl border border-white/[0.08] bg-white/[0.045] px-4 text-sm font-semibold text-zinc-300 transition hover:border-white/[0.14] hover:bg-white/[0.075] hover:text-zinc-100"
+                onClick={cancelRenderedPreview}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         )}
 
         {grid && animateStillImageActive && (
@@ -768,35 +1111,149 @@ export const StudioCanvas = ({
               onPointerDown={(event) => event.stopPropagation()}
               onWheel={(event) => event.stopPropagation()}
             >
-              <button
-                type="button"
-                aria-label={livePreviewPaused ? "Play live preview" : "Pause live preview"}
-                title={livePreviewPaused ? "Play live preview" : "Pause live preview"}
-                className="grid h-10 w-10 place-items-center rounded-xl border border-white/[0.06] bg-white/[0.045] text-zinc-300 transition hover:border-white/[0.12] hover:bg-white/[0.075] hover:text-zinc-100"
-                onClick={() => setLivePreviewPlaying((playing) => !playing)}
-              >
-                {livePreviewPaused ? <Play size={16} /> : <Pause size={16} />}
-              </button>
-              <div
-                className={`h-10 rounded-xl border border-white/[0.06] bg-black/20 px-3 text-xs leading-10 tabular-nums ${
-                  livePreviewStats?.isSlow && !livePreviewPaused ? "text-amber-200/90" : "text-zinc-400"
-                }`}
-                title="Live preview may scale down or skip frames to stay responsive. Preview Animation renders exact FPS."
-              >
-                {livePreviewLabel}
-              </div>
-              {canPreviewAnimation && (
-                <button
-                  type="button"
-                  className="flex h-10 items-center gap-2 rounded-xl border border-signal/35 bg-signal/15 px-3 text-xs font-semibold text-signal transition-colors duration-150 hover:border-signal/55 hover:bg-signal/20 disabled:cursor-not-allowed disabled:opacity-45"
-                  disabled={renderedPreview.status === "rendering"}
-                  onClick={() => {
-                    void startRenderedPreview();
-                  }}
-                >
-                  <Play size={14} />
-                  Preview Animation
-                </button>
+              {inlineFinalPreviewStatusVisible ? (
+                <>
+                  {(renderedPreview.status === "playing" || renderedPreview.status === "paused" || renderedPreview.status === "ready") && (
+                    <button
+                      type="button"
+                      aria-label={renderedPreview.status === "playing" ? "Pause final preview" : "Play final preview"}
+                      title={renderedPreview.status === "playing" ? "Pause final preview" : "Play final preview"}
+                      className="grid h-10 w-10 place-items-center rounded-xl border border-white/[0.06] bg-white/[0.045] text-zinc-300 transition hover:border-white/[0.12] hover:bg-white/[0.075] hover:text-zinc-100"
+                      onClick={renderedPreview.status === "playing" ? pauseRenderedPreview : resumeRenderedPreview}
+                    >
+                      {renderedPreview.status === "playing" ? <Pause size={16} /> : <Play size={16} />}
+                    </button>
+                  )}
+                  {(renderedPreview.status === "playing" || renderedPreview.status === "paused" || renderedPreview.status === "ready") && (
+                    <button
+                      type="button"
+                      className="grid h-10 w-10 place-items-center rounded-xl border border-white/[0.06] bg-white/[0.045] text-zinc-300 transition hover:border-white/[0.12] hover:bg-white/[0.075] hover:text-zinc-100"
+                      title="Replay final preview"
+                      onClick={replayRenderedPreview}
+                    >
+                      <RotateCcw size={16} />
+                    </button>
+                  )}
+                  <div className="h-10 rounded-xl border border-white/[0.06] bg-black/20 px-3 text-xs leading-10 tabular-nums text-zinc-400">
+                    {renderedPreview.status === "stale"
+                      ? "Preview outdated - Render again"
+                      : renderedPreview.status === "rendering"
+                      ? `Rendering ${renderedPreviewFormatLabel} preview - Frame ${renderedPreviewRenderedFrames} of ${renderedPreviewFrameCount} - ${Math.round(renderedPreviewProgress * 100)}%`
+                      : renderedPreview.status === "error"
+                      ? "Final preview error"
+                      : `Final preview - ${renderedPreviewFormatLabel} - ${renderedPreview.fps} fps - ${finalPreviewWidth}x${finalPreviewHeight}`}
+                  </div>
+                  {renderedPreviewCanUseCache && (
+                    <div className="h-10 rounded-xl border border-signal/20 bg-signal/10 px-3 text-xs font-semibold leading-10 text-signal">
+                      Ready to export
+                    </div>
+                  )}
+                  {renderedPreview.status === "rendering" ? (
+                    <button
+                      type="button"
+                      className="flex h-10 items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.045] px-3 text-xs font-semibold text-zinc-300 transition hover:border-white/[0.14] hover:bg-white/[0.075] hover:text-zinc-100"
+                      onClick={cancelRenderedPreview}
+                    >
+                      <X size={14} />
+                      Cancel
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="flex h-10 items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.045] px-3 text-xs font-semibold text-zinc-300 transition hover:border-white/[0.14] hover:bg-white/[0.075] hover:text-zinc-100"
+                      onClick={backToLivePreview}
+                    >
+                      Back to Live
+                    </button>
+                  )}
+                  {(renderedPreview.status === "stale" || renderedPreview.status === "error") && (
+                    <button
+                      type="button"
+                      className="flex h-10 items-center gap-2 rounded-xl border border-signal/35 bg-signal/15 px-3 text-xs font-semibold text-signal transition-colors duration-150 hover:border-signal/55 hover:bg-signal/20"
+                      onClick={() => {
+                        void startRenderedPreview();
+                      }}
+                    >
+                      <Play size={14} />
+                      Render Again
+                    </button>
+                  )}
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    aria-label={livePreviewPaused ? "Play live preview" : "Pause live preview"}
+                    title={livePreviewPaused ? "Play live preview" : "Pause live preview"}
+                    className="grid h-10 w-10 place-items-center rounded-xl border border-white/[0.06] bg-white/[0.045] text-zinc-300 transition hover:border-white/[0.12] hover:bg-white/[0.075] hover:text-zinc-100"
+                    onClick={() => setLivePreviewPlaying((playing) => !playing)}
+                  >
+                    {livePreviewPaused ? <Play size={16} /> : <Pause size={16} />}
+                  </button>
+                  <div
+                    className={`h-10 rounded-xl border border-white/[0.06] bg-black/20 px-3 text-xs leading-10 tabular-nums ${
+                      livePreviewStats?.isSlow && !livePreviewPaused && !visualEditPreviewActive
+                        ? "text-amber-200/90"
+                        : "text-zinc-400"
+                    }`}
+                    title="Live preview may scale down or skip frames to stay responsive. Preview Animation renders exact FPS."
+                  >
+                    {livePreviewLabel}
+                  </div>
+                  <label
+                    className="flex h-10 items-center gap-2 rounded-xl border border-white/[0.06] bg-black/20 px-3 text-xs text-zinc-400"
+                    title="Controls optimized live preview quality only. Exports and Preview Animation stay final quality."
+                  >
+                    <span className="whitespace-nowrap">Live Preview</span>
+                    <select
+                      className="h-7 rounded-lg border border-white/[0.06] bg-white/[0.045] px-2 text-xs font-semibold text-zinc-200 outline-none transition focus:border-signal/45"
+                      value={livePreviewOptimizationLevel}
+                      onChange={(event) => {
+                        setLivePreviewOptimizationLevel(event.target.value as LivePreviewOptimizationLevel);
+                      }}
+                    >
+                      {livePreviewOptimizationOptions.map((option) => (
+                        <option key={option.value} value={option.value} className="bg-panel text-zinc-100">
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {canPreviewAnimation && (
+                    <>
+                      <label
+                        className="flex h-10 items-center gap-2 rounded-xl border border-white/[0.06] bg-black/20 px-3 text-xs text-zinc-400"
+                        title="Controls final preview cache compatibility and suggested export format. Frames render at final output quality."
+                      >
+                        <span className="whitespace-nowrap">Preview as</span>
+                        <select
+                          className="h-7 rounded-lg border border-white/[0.06] bg-white/[0.045] px-2 text-xs font-semibold text-zinc-200 outline-none transition focus:border-signal/45"
+                          value={renderedPreview.previewFormat}
+                          onChange={(event) => {
+                            setAnimationPreviewFormat(event.target.value as AnimationPreviewFormat);
+                          }}
+                        >
+                          {animationPreviewFormatOptions.map((option) => (
+                            <option key={option.value} value={option.value} className="bg-panel text-zinc-100">
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        className="flex h-10 items-center gap-2 rounded-xl border border-signal/35 bg-signal/15 px-3 text-xs font-semibold text-signal transition-colors duration-150 hover:border-signal/55 hover:bg-signal/20 disabled:cursor-not-allowed disabled:opacity-45"
+                        disabled={renderedPreview.status === "rendering"}
+                        onClick={() => {
+                          void startRenderedPreview();
+                        }}
+                      >
+                        <Play size={14} />
+                        Preview Animation
+                      </button>
+                    </>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -826,162 +1283,6 @@ export const StudioCanvas = ({
             animate={{ opacity: 1 }}
             className="pointer-events-none absolute inset-6 z-30 rounded-2xl border border-signal/45 bg-signal/10"
           />
-        )}
-
-        {renderedPreviewOpen && (
-          <div className="fixed inset-0 z-[120] grid place-items-center bg-black/70 p-6 backdrop-blur-sm">
-            <motion.div
-              className="flex max-h-[calc(100vh-48px)] w-[min(960px,calc(100vw-48px))] flex-col overflow-hidden rounded-2xl border border-white/[0.08] bg-panel shadow-2xl"
-              initial={{ opacity: 0, scale: 0.98 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ duration: 0.16, ease: "easeOut" }}
-              onPointerDown={(event) => event.stopPropagation()}
-              onWheel={(event) => event.stopPropagation()}
-            >
-              <div className="flex items-center justify-between gap-4 border-b border-white/[0.06] px-5 py-4">
-                <div className="min-w-0">
-                  <h2 className="text-sm font-semibold text-zinc-100">Animation Preview</h2>
-                  <div className="mt-1 text-xs text-zinc-400">{renderedPreviewLabel}</div>
-                </div>
-                <button
-                  type="button"
-                  className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-white/[0.06] bg-white/[0.045] text-zinc-300 transition hover:border-white/[0.12] hover:bg-white/[0.075] hover:text-zinc-100"
-                  title="Close"
-                  aria-label="Close animation preview"
-                  onClick={closeRenderedPreview}
-                >
-                  <X size={16} />
-                </button>
-              </div>
-
-              <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
-                <div className="relative grid min-h-[260px] place-items-center overflow-hidden rounded-xl border border-white/[0.06] bg-black/35 p-3">
-                  <canvas
-                    ref={renderedPreviewCanvasRef}
-                    className={`block h-auto max-h-[58vh] max-w-full object-contain ${font.smoothing ? "" : "[image-rendering:pixelated]"}`}
-                  />
-                  {(renderedPreview.status === "idle" || renderedPreview.status === "rendering") && (
-                    <div className="pointer-events-none absolute text-xs text-zinc-500">
-                      {renderedPreview.status === "rendering" ? "Rendering..." : "Ready"}
-                    </div>
-                  )}
-                </div>
-
-                {renderedPreview.status === "rendering" && (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between gap-3 text-xs text-zinc-400">
-                      <span>
-                        Rendering frame {renderedPreviewRenderedFrames} / {renderedPreviewFrameCount}
-                      </span>
-                      <span>{Math.round(renderedPreviewProgress * 100)}%</span>
-                    </div>
-                    <div className="h-2 overflow-hidden rounded-full bg-black/40">
-                      <div
-                        className="h-full rounded-full bg-signal transition-all duration-150"
-                        style={{ width: `${Math.round(renderedPreviewProgress * 100)}%` }}
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {renderedPreview.status === "error" && (
-                  <div className="rounded-xl border border-ember/25 bg-ember/10 px-3 py-2 text-xs leading-5 text-ember">
-                    {renderedPreview.error ?? "Rendered preview failed."}
-                  </div>
-                )}
-              </div>
-
-              <div className="flex flex-wrap items-center justify-end gap-2 border-t border-white/[0.06] px-5 py-4">
-                {canExportFromRenderedPreview && (
-                  <div className="min-w-[220px] flex-1 text-xs leading-5 text-zinc-500">
-                    Export uses final export settings, not cached preview frames.
-                    {isExportingVideo && (
-                      <div className="mt-2 flex items-center gap-2">
-                        <div className="h-1.5 min-w-24 flex-1 overflow-hidden rounded-full bg-black/40">
-                          <div
-                            className="h-full rounded-full bg-signal transition-all duration-150"
-                            style={{ width: `${Math.round(Math.min(1, Math.max(0, videoExportProgress)) * 100)}%` }}
-                          />
-                        </div>
-                        <span className="tabular-nums">{Math.round(Math.min(1, Math.max(0, videoExportProgress)) * 100)}%</span>
-                      </div>
-                    )}
-                  </div>
-                )}
-                {renderedPreview.status === "rendering" && (
-                  <button
-                    type="button"
-                    className="flex h-10 items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.055] px-4 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.085] hover:text-zinc-50"
-                    onClick={cancelRenderedPreview}
-                  >
-                    <X size={15} />
-                    Cancel
-                  </button>
-                )}
-                {renderedPreview.status === "playing" && (
-                  <button
-                    type="button"
-                    className="flex h-10 items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.055] px-4 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.085] hover:text-zinc-50"
-                    onClick={pauseRenderedPreview}
-                  >
-                    <Pause size={15} />
-                    Pause
-                  </button>
-                )}
-                {renderedPreview.status === "paused" && (
-                  <button
-                    type="button"
-                    className="flex h-10 items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.055] px-4 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.085] hover:text-zinc-50"
-                    onClick={resumeRenderedPreview}
-                  >
-                    <Play size={15} />
-                    Play
-                  </button>
-                )}
-                {(renderedPreview.status === "ready" || renderedPreview.status === "paused" || renderedPreview.status === "playing") && (
-                  <button
-                    type="button"
-                    className="flex h-10 items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.055] px-4 text-sm font-semibold text-zinc-200 transition hover:bg-white/[0.085] hover:text-zinc-50"
-                    onClick={replayRenderedPreview}
-                  >
-                    <RotateCcw size={15} />
-                    Replay
-                  </button>
-                )}
-                {canExportFromRenderedPreview && (
-                  <button
-                    type="button"
-                    className="flex h-10 items-center gap-2 rounded-xl border border-signal/35 bg-signal/15 px-4 text-sm font-semibold text-signal transition hover:border-signal/55 hover:bg-signal/20 disabled:cursor-not-allowed disabled:opacity-45"
-                    disabled={isExportingVideo}
-                    onClick={exportRenderedPreviewAnimation}
-                  >
-                    <Download size={15} />
-                    {isExportingVideo ? "Exporting..." : "Export Animation"}
-                  </button>
-                )}
-                {(renderedPreview.status === "stale" || renderedPreview.status === "error" || renderedPreview.status === "idle") && (
-                  <button
-                    type="button"
-                    className="flex h-10 items-center gap-2 rounded-xl border border-signal/35 bg-signal/15 px-4 text-sm font-semibold text-signal transition hover:border-signal/55 hover:bg-signal/20 disabled:cursor-not-allowed disabled:opacity-45"
-                    disabled={!canPreviewAnimation}
-                    onClick={() => {
-                      void startRenderedPreview();
-                    }}
-                  >
-                    <RotateCcw size={15} />
-                    {renderedPreview.status === "stale" ? "Render Again" : "Render Preview"}
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="flex h-10 items-center gap-2 rounded-xl border border-white/[0.08] bg-transparent px-4 text-sm font-semibold text-zinc-300 transition hover:bg-white/[0.055] hover:text-zinc-100"
-                  onClick={closeRenderedPreview}
-                >
-                  Close
-                </button>
-              </div>
-            </motion.div>
-          </div>
         )}
       </div>
     </main>

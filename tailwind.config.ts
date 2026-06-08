@@ -5,8 +5,8 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ["Inter", "Geist", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "ui-sans-serif", "system-ui"],
-        mono: ["IBM Plex Mono", "JetBrains Mono", "ui-monospace", "monospace"]
+        sans: ["Funnel Sans", "Inter", "Geist", "-apple-system", "BlinkMacSystemFont", "Segoe UI", "ui-sans-serif", "system-ui"],
+        mono: ["Chivo Mono", "ui-monospace", "monospace"]
       },
       colors: {
         ink: "#0B0B0C",

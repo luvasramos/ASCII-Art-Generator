@@ -168,6 +168,25 @@ const withMatrixTransition = (cell: CellRenderData, strength: number): CellRende
       }
     : cell;
 
+const withMatrixCellPulse = (
+  cell: CellRenderData,
+  strength: number,
+  fraction: number,
+  patch: Partial<CellRenderData>
+): CellRenderData => {
+  const pulse = matrixChancePulse(fraction);
+  const alphaPulse = 0.72 + pulse * 0.28;
+  return withMatrixTransition(
+    {
+      ...cell,
+      ...patch,
+      foregroundAlpha: clamp01(cell.foregroundAlpha * alphaPulse),
+      foreground: clamp01((patch.foreground ?? cell.foreground) * (0.86 + pulse * 0.22))
+    },
+    strength
+  );
+};
+
 const applyFadeIntensity = (
   grid: RenderGrid,
   ascii: AsciiSettings,
@@ -191,6 +210,7 @@ const applyFadeIntensity = (
         return {
           ...cell,
           foreground: clamp01(cell.foreground * (0.08 + localIntensity * 0.92)),
+          foregroundAlpha: clamp01(cell.foregroundAlpha * localIntensity),
           background: clamp01(cell.background * density),
           backgroundAlpha: clamp01(cell.backgroundAlpha * density)
         };
@@ -220,6 +240,7 @@ const applyFadeIntensity = (
       background: clamp01(cell.background * backgroundDensity),
       backgroundAlpha: clamp01(cell.backgroundAlpha * backgroundDensity),
       foreground: clamp01(cell.foreground * (0.12 + localIntensity * 0.88)),
+      foregroundAlpha: clamp01(cell.foregroundAlpha * localIntensity),
       glyph: nearestGlyph(glyphs, targetDensity)
     };
   });
@@ -346,12 +367,15 @@ const applyMatrixGlyphs = (
           : randomOffset;
       const nextIndex = Math.min(glyphCount - 1, Math.max(0, baseIndex + fallbackOffset));
       const nextForeground = glyphCount > 1 ? nextIndex / (glyphCount - 1) : cell.foreground;
-      return withMatrixTransition(
-        {
-          ...cell,
-          foreground: nextForeground
-        },
-        nextIndex !== baseIndex ? matrixTransitionStrength(cell, animation, controls, slot, secondarySlot, fraction) : 0
+      if (nextIndex === baseIndex) {
+        return cell;
+      }
+
+      return withMatrixCellPulse(
+        cell,
+        matrixTransitionStrength(cell, animation, controls, slot, secondarySlot, fraction),
+        fraction,
+        { foreground: nextForeground }
       );
     });
 
@@ -403,12 +427,15 @@ const applyMatrixGlyphs = (
         ? Math.min(characters.length - 1, Math.max(0, currentIndex + randomOffset))
         : fallbackIndex;
     const nextGlyph = characters[index] ?? cell.glyph;
-    return withMatrixTransition(
-      {
-        ...cell,
-        glyph: nextGlyph
-      },
-      nextGlyph !== cell.glyph ? matrixTransitionStrength(cell, animation, controls, slot, secondarySlot, fraction) : 0
+    if (nextGlyph === cell.glyph) {
+      return cell;
+    }
+
+    return withMatrixCellPulse(
+      cell,
+      matrixTransitionStrength(cell, animation, controls, slot, secondarySlot, fraction),
+      fraction,
+      { glyph: nextGlyph }
     );
   });
   return {

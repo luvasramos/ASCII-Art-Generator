@@ -11,7 +11,7 @@ import type {
 import { defaultCharacterPreset } from "../presets/characterPresets";
 
 export const defaultFontSettings: FontSettings = {
-  family: "IBM Plex Mono",
+  family: "Chivo Mono",
   size: 13,
   weight: 500,
   lineHeight: 1.08,

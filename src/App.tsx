@@ -14,8 +14,16 @@ import { createAnimatedImageRenderer, type AnimatedImageRenderer } from "./proce
 import { loadFileAsImage, loadImageElement, imageToPreviewData, isSupportedImage } from "./processing/imageInput";
 import { isSupportedVideo, loadFileAsVideo, seekVideo, videoFrameToImageData } from "./processing/videoInput";
 import { extractSourceImagePalette } from "./quantization/sourcePalette";
+import { getRenderedPreviewCache } from "./renderer/useRenderedAnimationPreview";
 import { useAsciiProcessor } from "./renderer/useAsciiProcessor";
-import type { LoadedVideoSource, MediaKind, StillImageMode, ToneRangePreview } from "./renderer/types";
+import type {
+  AnimationPreviewFormat,
+  LoadedVideoSource,
+  MediaKind,
+  StillImageMode,
+  ToneRangePreview,
+  VisualEditPreviewState
+} from "./renderer/types";
 import { useStudioStore } from "./state/useStudioStore";
 import { RightSidebar } from "./ui/RightSidebar";
 import { StudioCanvas } from "./ui/StudioCanvas";
@@ -52,6 +60,17 @@ const mp4FailureStatus = (error: unknown) => {
 
 const isSupportedMediaFile = (file: File) => isSupportedImage(file) || isSupportedVideo(file);
 
+const visualEditPreviewSettleMs = 560;
+
+const inactiveVisualEditPreview: VisualEditPreviewState = {
+  isActive: false,
+  startedAt: null,
+  lastChangedAt: null,
+  reason: null,
+  interactionDepth: 0,
+  pendingReturnToLivePreview: false
+};
+
 export default function App() {
   const store = useStudioStore();
   const [imageData, setImageData] = useState<ImageData | null>(null);
@@ -70,6 +89,7 @@ export default function App() {
   const [mediaVersion, setMediaVersion] = useState(0);
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [toneRangePreview, setToneRangePreview] = useState<ToneRangePreview | null>(null);
+  const [visualEditPreview, setVisualEditPreview] = useState<VisualEditPreviewState>(inactiveVisualEditPreview);
   const [sourcePaletteRefreshVersion, setSourcePaletteRefreshVersion] = useState(0);
   const [sourcePaletteExtracting, setSourcePaletteExtracting] = useState(false);
   const videoSourceRef = useRef<LoadedVideoSource | null>(null);
@@ -77,6 +97,67 @@ export default function App() {
   const videoExportAbortRef = useRef<AbortController | null>(null);
   const syncedImageDataUrlRef = useRef<string | null>(null);
   const sourcePaletteRequestRef = useRef(0);
+  const visualEditReturnTimerRef = useRef<number | null>(null);
+
+  const clearVisualEditReturnTimer = useCallback(() => {
+    if (visualEditReturnTimerRef.current !== null) {
+      window.clearTimeout(visualEditReturnTimerRef.current);
+      visualEditReturnTimerRef.current = null;
+    }
+  }, []);
+
+  const beginVisualEditPreview = useCallback(
+    (reason: string) => {
+      clearVisualEditReturnTimer();
+      const now = performance.now();
+      setVisualEditPreview((current) => ({
+        isActive: true,
+        startedAt: current.isActive ? current.startedAt ?? now : now,
+        lastChangedAt: now,
+        reason,
+        interactionDepth: current.interactionDepth + 1,
+        pendingReturnToLivePreview: false
+      }));
+    },
+    [clearVisualEditReturnTimer]
+  );
+
+  const finishVisualEditPreview = useCallback(() => {
+    const now = performance.now();
+    setVisualEditPreview((current) => {
+      if (!current.isActive && current.interactionDepth <= 0) {
+        return current;
+      }
+      return {
+        ...current,
+        lastChangedAt: now,
+        interactionDepth: Math.max(0, current.interactionDepth - 1),
+        pendingReturnToLivePreview: true
+      };
+    });
+    clearVisualEditReturnTimer();
+    visualEditReturnTimerRef.current = window.setTimeout(() => {
+      visualEditReturnTimerRef.current = null;
+      setVisualEditPreview((current) =>
+        current.interactionDepth > 0
+          ? current
+          : {
+              ...inactiveVisualEditPreview,
+              lastChangedAt: performance.now()
+            }
+      );
+    }, visualEditPreviewSettleMs);
+  }, [clearVisualEditReturnTimer]);
+
+  const pulseVisualEditPreview = useCallback(
+    (reason: string) => {
+      beginVisualEditPreview(reason);
+      window.setTimeout(finishVisualEditPreview, 0);
+    },
+    [beginVisualEditPreview, finishVisualEditPreview]
+  );
+
+  useEffect(() => () => clearVisualEditReturnTimer(), [clearVisualEditReturnTimer]);
 
   const releaseVideoSource = useCallback(() => {
     const current = videoSourceRef.current;
@@ -429,6 +510,37 @@ export default function App() {
     glyphMetrics
   });
 
+  const getReusableFinalPreviewCache = useCallback(
+    (options: { allowTransparentVideo?: boolean; format?: AnimationPreviewFormat } = {}) => {
+      const preview = store.renderedPreview;
+      if (
+        preview.quality !== "final" ||
+        (options.format && preview.previewFormat !== options.format) ||
+        !preview.cacheKey ||
+        preview.status === "idle" ||
+        preview.status === "rendering" ||
+        preview.status === "stale" ||
+        preview.status === "error"
+      ) {
+        return null;
+      }
+      if (options.allowTransparentVideo === false && store.exportOptions.transparentBackground) {
+        return null;
+      }
+      const cache = getRenderedPreviewCache(preview.cacheKey);
+      if (
+        !cache ||
+        cache.quality !== "final" ||
+        cache.previewFormat !== preview.previewFormat ||
+        (options.format && cache.previewFormat !== options.format)
+      ) {
+        return null;
+      }
+      return cache;
+    },
+    [store.exportOptions.transparentBackground, store.renderedPreview]
+  );
+
   const createAnimatedPngSnapshot = useCallback(async () => {
     if (!isStillImageAnimationActive || !imageAnimator) {
       return null;
@@ -711,6 +823,10 @@ export default function App() {
         ...store.animation,
         enabled: true
       };
+      const cachedFrames = getReusableFinalPreviewCache({ allowTransparentVideo: false, format: preferredExtension });
+      if (cachedFrames) {
+        setStatus(preferredExtension === "mp4" ? "Exporting MP4 from final preview" : "Exporting WebM from final preview");
+      }
       const result = await exportAsciiFrameSequence({
         sourceName: store.imageName,
         fileSuffix: "ascii-animation",
@@ -734,6 +850,7 @@ export default function App() {
         signal: controller.signal,
         onProgress: setVideoExportProgress,
         onStatus: setStatus,
+        cachedFrames,
         getFrame: (time) => imageAnimator.render(animationSettings, time)
       });
       setStatus(
@@ -753,6 +870,7 @@ export default function App() {
     }
   }, [
     glyphMetrics,
+    getReusableFinalPreviewCache,
     imageAnimator,
     isExportingVideo,
     staticImageData,
@@ -791,6 +909,10 @@ export default function App() {
         ...store.animation,
         enabled: true
       };
+      const cachedFrames = getReusableFinalPreviewCache({ format: "gif" });
+      if (cachedFrames) {
+        setStatus("Exporting GIF from final preview");
+      }
       await exportAsciiGif({
         sourceName: store.imageName,
         duration: animationSettings.loopDuration,
@@ -809,6 +931,7 @@ export default function App() {
         signal: controller.signal,
         onProgress: setVideoExportProgress,
         onStatus: setStatus,
+        cachedFrames,
         getFrame: (time) => imageAnimator.render(animationSettings, time)
       });
       setStatus("Exported GIF");
@@ -821,6 +944,7 @@ export default function App() {
     }
   }, [
     glyphMetrics,
+    getReusableFinalPreviewCache,
     imageAnimator,
     isExportingVideo,
     staticImageData,
@@ -851,6 +975,10 @@ export default function App() {
         ...store.animation,
         enabled: true
       };
+      const cachedFrames = getReusableFinalPreviewCache({ format: "png-sequence" });
+      if (cachedFrames) {
+        setStatus("Exporting PNG sequence from final preview");
+      }
       await exportAsciiPngSequence({
         sourceName: store.imageName,
         duration: animationSettings.loopDuration,
@@ -869,6 +997,7 @@ export default function App() {
         signal: controller.signal,
         onProgress: setVideoExportProgress,
         onStatus: setStatus,
+        cachedFrames,
         getFrame: (time) => imageAnimator.render(animationSettings, time)
       });
       setStatus("Exported PNG sequence");
@@ -881,6 +1010,7 @@ export default function App() {
     }
   }, [
     glyphMetrics,
+    getReusableFinalPreviewCache,
     imageAnimator,
     isExportingVideo,
     staticImageData,
@@ -937,7 +1067,6 @@ export default function App() {
           glyphMetrics={glyphMetrics}
           isProcessing={isProcessing}
           rendererWarning={rendererWarning}
-          status={rendererWarning || status}
           onMediaFile={handleMediaFile}
           videoPlayback={{
             isVideo: mediaKind === "video" && Boolean(videoSource),
@@ -952,9 +1081,7 @@ export default function App() {
           animateStillImageActive={isStillImageAnimationActive}
           onAnimationPerformanceWarning={setStatus}
           toneRangePreview={toneRangePreview}
-          onExportAnimation={handleExportAnimation}
-          isExportingVideo={isExportingVideo}
-          videoExportProgress={videoExportProgress}
+          visualEditPreview={visualEditPreview}
         />
         <TopLeftActions
           grid={grid}
@@ -1012,6 +1139,9 @@ export default function App() {
           stillImageMode={stillImageMode}
           onStillImageModeChange={handleStillImageModeChange}
           onToneRangePreviewChange={setToneRangePreview}
+          onVisualEditPreviewStart={beginVisualEditPreview}
+          onVisualEditPreviewEnd={finishVisualEditPreview}
+          onVisualEditPreviewPulse={pulseVisualEditPreview}
         />
       </div>
     </div>

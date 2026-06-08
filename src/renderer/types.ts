@@ -1,9 +1,6 @@
 export type BuiltInFont =
-  | "IBM Plex Mono"
-  | "JetBrains Mono"
-  | "Space Mono"
-  | "Fira Mono"
-  | "VT323";
+  | "Chivo Mono"
+  | "Funnel Sans";
 
 export type AsciiGlyphMode = "characters" | "images";
 export type PaletteMode = "grayscale" | "custom" | "single" | "source";
@@ -35,10 +32,21 @@ export type AmbientDirection = "vertical" | "horizontal" | "diagonal" | "circula
 export type EchoFadeCurve = "linear" | "smooth" | "exponential";
 export type AnimationPreviewResolution = "low" | "medium" | "high" | "full";
 export type AnimationPreviewMode = "live" | "rendered";
+export type LivePreviewOptimizationLevel = "super-fast" | "fast" | "balanced" | "high" | "off";
+export type AnimationPreviewFormat = "webm" | "gif" | "mp4" | "png-sequence";
 export type RenderedPreviewStatus = "idle" | "rendering" | "ready" | "playing" | "paused" | "stale" | "error";
 export type RenderedPreviewQuality = "fast" | "balanced" | "final";
 export type AnimatedExportQuality = "preview" | "standard" | "high" | "master";
 export type ToneRangePreview = "shadows" | "midtones" | "highlights";
+
+export interface VisualEditPreviewState {
+  isActive: boolean;
+  startedAt: number | null;
+  lastChangedAt: number | null;
+  reason: string | null;
+  interactionDepth: number;
+  pendingReturnToLivePreview: boolean;
+}
 
 export interface UploadedFontRecord {
   id: string;
@@ -181,6 +189,7 @@ export interface RenderedPreviewState {
   progress: number;
   cacheKey: string | null;
   quality: RenderedPreviewQuality;
+  previewFormat: AnimationPreviewFormat;
   cancelRequestId: string | null;
   error: string | null;
 }
@@ -255,6 +264,7 @@ export interface SettingsPreset {
   name: string;
   createdAt: number;
   settings: StudioSettingsSnapshot;
+  builtIn?: boolean;
 }
 
 export interface GlyphMetric {

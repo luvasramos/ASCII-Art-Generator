@@ -1,6 +1,6 @@
-import type { UploadedFontRecord } from "../renderer/types";
+import type { BuiltInFont, UploadedFontRecord } from "../renderer/types";
 
-export const builtInFonts = ["IBM Plex Mono", "JetBrains Mono", "Space Mono", "Fira Mono", "VT323"];
+export const builtInFonts: BuiltInFont[] = ["Chivo Mono", "Funnel Sans"];
 
 export const waitForFonts = async (timeoutMs = 1200) => {
   if (!("fonts" in document)) {

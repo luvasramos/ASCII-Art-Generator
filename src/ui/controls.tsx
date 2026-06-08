@@ -1,9 +1,29 @@
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, ChevronDown, RotateCcw } from "lucide-react";
 import { evaluateNumberExpression } from "../utils/numberExpression";
+
+interface VisualEditingPreviewControls {
+  start?: (reason: string) => void;
+  end?: () => void;
+  pulse?: (reason: string) => void;
+}
+
+const VisualEditingPreviewContext = createContext<VisualEditingPreviewControls>({});
+
+export const VisualEditingPreviewProvider = ({
+  value,
+  children
+}: {
+  value: VisualEditingPreviewControls;
+  children: ReactNode;
+}) => (
+  <VisualEditingPreviewContext.Provider value={value}>{children}</VisualEditingPreviewContext.Provider>
+);
+
+const useVisualEditingPreview = () => useContext(VisualEditingPreviewContext);
 
 interface SectionProps {
   title: string;
@@ -110,6 +130,7 @@ export const Slider = ({
   const [draft, setDraft] = useState("");
   const [resetPulse, setResetPulse] = useState(0);
   const interactingRef = useRef(false);
+  const visualEditingPreview = useVisualEditingPreview();
   const fill = ((value - min) / Math.max(0.0001, max - min)) * 100;
   const style = { "--slider-fill": `${Math.min(100, Math.max(0, fill))}%` } as CSSProperties;
   const displayValue = Number.isInteger(step) ? String(Math.round(value)) : value.toFixed(2);
@@ -124,6 +145,7 @@ export const Slider = ({
   const applyDraft = () => {
     const nextValue = evaluateNumberExpression(draft);
     if (typeof nextValue === "number") {
+      visualEditingPreview.pulse?.(`Slider: ${label}`);
       onChange(Math.min(max, Math.max(min, nextValue)));
     }
     setEditing(false);
@@ -144,6 +166,7 @@ export const Slider = ({
       return;
     }
     interactingRef.current = true;
+    visualEditingPreview.start?.(`Slider: ${label}`);
     onInteractionStart?.();
   };
 
@@ -153,6 +176,7 @@ export const Slider = ({
     }
     interactingRef.current = false;
     onInteractionEnd?.();
+    visualEditingPreview.end?.();
   };
 
   return (
@@ -194,6 +218,7 @@ export const Slider = ({
             onClick={() => {
               if (typeof resetValue === "number") {
                 setResetPulse((pulse) => pulse + 1);
+                visualEditingPreview.pulse?.(`Reset slider: ${label}`);
                 onChange(resetValue);
               }
             }}
@@ -241,6 +266,7 @@ const CustomSelect = ({ label, value, options, disabled = false, onChange }: Sel
   const [menuStyle, setMenuStyle] = useState<CSSProperties | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const visualEditingPreview = useVisualEditingPreview();
   const selected = options.find((option) => option.value === value) ?? options[0];
 
   useEffect(() => {
@@ -290,6 +316,9 @@ const CustomSelect = ({ label, value, options, disabled = false, onChange }: Sel
   }, [open, options.length]);
 
   const choose = (nextValue: string) => {
+    if (nextValue !== value) {
+      visualEditingPreview.pulse?.(`Select: ${label}`);
+    }
     onChange(nextValue);
     setOpen(false);
   };
@@ -379,33 +408,37 @@ interface ToggleProps {
   onChange: (value: boolean) => void;
 }
 
-export const Toggle = ({ label, checked, disabled, onChange }: ToggleProps) => (
-  <label className={`flex items-center justify-between gap-3 text-sm text-zinc-300 ${disabled ? "opacity-45" : ""}`}>
-    <span>{label}</span>
-    <button
-      className={`relative h-7 w-12 shrink-0 rounded-full border transition ${
-        checked ? "border-signal/50 bg-signal/20" : "border-white/[0.08] bg-black/25"
-      }`}
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      disabled={disabled}
-      onClick={() => {
-        if (!disabled) {
-          onChange(!checked);
-        }
-      }}
-    >
-      <motion.span
-        className="absolute inset-y-0 left-0 flex items-center"
-        animate={{ x: checked ? 22 : 4 }}
-        transition={{ duration: 0.14, ease: "easeOut" }}
+export const Toggle = ({ label, checked, disabled, onChange }: ToggleProps) => {
+  const visualEditingPreview = useVisualEditingPreview();
+  return (
+    <label className={`flex items-center justify-between gap-3 text-sm text-zinc-300 ${disabled ? "opacity-45" : ""}`}>
+      <span>{label}</span>
+      <button
+        className={`relative h-7 w-12 shrink-0 rounded-full border transition ${
+          checked ? "border-signal/50 bg-signal/20" : "border-white/[0.08] bg-black/25"
+        }`}
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        disabled={disabled}
+        onClick={() => {
+          if (!disabled) {
+            visualEditingPreview.pulse?.(`Toggle: ${label}`);
+            onChange(!checked);
+          }
+        }}
       >
-        <span className="block h-5 w-5 rounded-full bg-zinc-100" />
-      </motion.span>
-    </button>
-  </label>
-);
+        <motion.span
+          className="absolute inset-y-0 left-0 flex items-center"
+          animate={{ x: checked ? 22 : 4 }}
+          transition={{ duration: 0.14, ease: "easeOut" }}
+        >
+          <span className="block h-5 w-5 rounded-full bg-zinc-100" />
+        </motion.span>
+      </button>
+    </label>
+  );
+};
 
 interface ColorInputProps {
   label: string;
@@ -505,6 +538,8 @@ export const ColorInput = ({ label, value, disabled, onChange }: ColorInputProps
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
   const svBoxRef = useRef<HTMLDivElement | null>(null);
+  const colorInteractingRef = useRef(false);
+  const visualEditingPreview = useVisualEditingPreview();
   const normalized = normalizeHex(value) ?? "#000000";
   const rgb = hexToRgb(normalized);
   const hsv = rgbToHsv(rgb);
@@ -517,6 +552,10 @@ export const ColorInput = ({ label, value, disabled, onChange }: ColorInputProps
 
   useEffect(() => {
     if (!open) {
+      if (colorInteractingRef.current) {
+        colorInteractingRef.current = false;
+        visualEditingPreview.end?.();
+      }
       return;
     }
     const handlePointerDown = (event: PointerEvent) => {
@@ -532,7 +571,23 @@ export const ColorInput = ({ label, value, disabled, onChange }: ColorInputProps
     };
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [open]);
+  }, [open, visualEditingPreview]);
+
+  const beginColorInteraction = () => {
+    if (disabled || colorInteractingRef.current) {
+      return;
+    }
+    colorInteractingRef.current = true;
+    visualEditingPreview.start?.(`Color: ${label}`);
+  };
+
+  const endColorInteraction = () => {
+    if (!colorInteractingRef.current) {
+      return;
+    }
+    colorInteractingRef.current = false;
+    visualEditingPreview.end?.();
+  };
 
   useEffect(() => {
     if (!open) {
@@ -596,6 +651,7 @@ export const ColorInput = ({ label, value, disabled, onChange }: ColorInputProps
   const handleSaturationValuePointer = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
+    beginColorInteraction();
     updateSaturationValue(event.clientX, event.clientY);
   };
 
@@ -625,6 +681,8 @@ export const ColorInput = ({ label, value, disabled, onChange }: ColorInputProps
             className="relative h-40 w-full touch-none cursor-crosshair overflow-hidden rounded-xl border border-white/[0.08]"
             style={{ backgroundColor: hueColor }}
             onPointerDown={handleSaturationValuePointer}
+            onPointerUp={endColorInteraction}
+            onPointerCancel={endColorInteraction}
             onPointerMove={(event) => {
               if (event.buttons === 1) {
                 updateSaturationValue(event.clientX, event.clientY);
@@ -658,6 +716,12 @@ export const ColorInput = ({ label, value, disabled, onChange }: ColorInputProps
               max={359}
               step={1}
               value={Math.round(hsv.h)}
+              onPointerDown={beginColorInteraction}
+              onPointerUp={endColorInteraction}
+              onPointerCancel={endColorInteraction}
+              onBlur={endColorInteraction}
+              onKeyDown={beginColorInteraction}
+              onKeyUp={endColorInteraction}
               onChange={(event) => updateHue(Number(event.target.value))}
             />
           </label>
@@ -669,6 +733,7 @@ export const ColorInput = ({ label, value, disabled, onChange }: ColorInputProps
                 className="h-10 min-w-0 flex-1 bg-transparent text-sm font-medium uppercase text-zinc-100 outline-none"
                 value={draftHex}
                 spellCheck={false}
+                onFocus={beginColorInteraction}
                 onChange={(event) => {
                   const nextValue = event.target.value;
                   setDraftHex(nextValue);
@@ -677,7 +742,10 @@ export const ColorInput = ({ label, value, disabled, onChange }: ColorInputProps
                     onChange(next);
                   }
                 }}
-                onBlur={() => commitHex(draftHex)}
+                onBlur={() => {
+                  commitHex(draftHex);
+                  endColorInteraction();
+                }}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
                     event.currentTarget.blur();
@@ -706,24 +774,32 @@ interface IconButtonProps {
   type?: "button" | "submit";
 }
 
-export const IconButton = ({ title, children, onClick, active, disabled, type = "button" }: IconButtonProps) => (
-  <button
-    className={`group relative grid h-10 w-10 place-items-center overflow-visible rounded-2xl border text-zinc-200 transition-colors duration-150 ${
-      active
-        ? "border-signal/50 bg-signal/15 text-signal"
-        : "border-white/[0.06] bg-white/[0.045] hover:border-white/[0.12] hover:bg-white/[0.075]"
-    } disabled:cursor-not-allowed disabled:opacity-40`}
-    aria-label={title}
-    type={type}
-    disabled={disabled}
-    onClick={onClick}
-  >
-    {children}
-    <span className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 -translate-x-1/2 whitespace-nowrap rounded-lg border border-white/[0.06] bg-panel px-2.5 py-1.5 text-[11px] font-medium text-zinc-300 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
-      {title}
-    </span>
-  </button>
-);
+export const IconButton = ({ title, children, onClick, active, disabled, type = "button" }: IconButtonProps) => {
+  const visualEditingPreview = useVisualEditingPreview();
+  return (
+    <button
+      className={`group relative grid h-10 w-10 place-items-center overflow-visible rounded-2xl border text-zinc-200 transition-colors duration-150 ${
+        active
+          ? "border-signal/50 bg-signal/15 text-signal"
+          : "border-white/[0.06] bg-white/[0.045] hover:border-white/[0.12] hover:bg-white/[0.075]"
+      } disabled:cursor-not-allowed disabled:opacity-40`}
+      aria-label={title}
+      type={type}
+      disabled={disabled}
+      onClick={() => {
+        if (!disabled) {
+          visualEditingPreview.pulse?.(`Button: ${title}`);
+        }
+        onClick?.();
+      }}
+    >
+      {children}
+      <span className="pointer-events-none absolute left-1/2 top-full z-50 mt-2 -translate-x-1/2 whitespace-nowrap rounded-lg border border-white/[0.06] bg-panel px-2.5 py-1.5 text-[11px] font-medium text-zinc-300 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
+        {title}
+      </span>
+    </button>
+  );
+};
 
 interface CommandButtonProps {
   children: ReactNode;
@@ -746,6 +822,7 @@ export const CommandButton = ({
       : variant === "ghost"
       ? "border-white/[0.06] bg-transparent text-zinc-300 hover:bg-white/[0.055] hover:text-zinc-100"
       : "border-white/[0.065] bg-white/[0.055] text-zinc-200 hover:bg-white/[0.085] hover:text-zinc-50";
+  const visualEditingPreview = useVisualEditingPreview();
 
   return (
     <button
@@ -753,7 +830,12 @@ export const CommandButton = ({
       type="button"
       title={title}
       disabled={disabled}
-      onClick={onClick}
+      onClick={() => {
+        if (!disabled) {
+          visualEditingPreview.pulse?.(`Button: ${title ?? "command"}`);
+        }
+        onClick?.();
+      }}
     >
       {children}
     </button>

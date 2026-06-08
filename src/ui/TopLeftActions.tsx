@@ -8,9 +8,10 @@ import {
   resolveAnimatedExportFps,
   resolveAnimatedExportProfile
 } from "../export/exportQuality";
+import { getRenderedPreviewCache } from "../renderer/useRenderedAnimationPreview";
 import { defaultExportOptions } from "../state/defaults";
 import { useStudioStore } from "../state/useStudioStore";
-import type { AnimatedExportQuality, AnimationType, RenderGrid } from "../renderer/types";
+import type { AnimatedExportQuality, AnimationPreviewFormat, AnimationType, RenderGrid } from "../renderer/types";
 import { CommandButton, Select, Slider, Toggle } from "./controls";
 
 interface TopLeftActionsProps {
@@ -52,6 +53,16 @@ const exportFileTypeOptions: Array<{ value: ExportFileType; label: string }> = [
   { value: "gif", label: "GIF" }
 ];
 
+const animationPreviewFormatLabels: Record<AnimationPreviewFormat, string> = {
+  webm: "WebM",
+  gif: "GIF",
+  mp4: "MP4",
+  "png-sequence": "PNG Sequence"
+};
+
+const isAnimationPreviewFormat = (value: ExportFileType): value is AnimationPreviewFormat =>
+  value === "webm" || value === "gif" || value === "mp4" || value === "png-sequence";
+
 const videoScaleOptions = [
   { value: "1", label: "1x" },
   { value: "2", label: "2x" },
@@ -86,7 +97,17 @@ export const TopLeftActions = ({
   const mediaInputRef = useRef<HTMLInputElement | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [fileType, setFileType] = useState<ExportFileType>("png");
-  const { font, exportOptions, exportScale, updateFont, updateExportOptions, updateExportScale } = useStudioStore();
+  const previewSyncedFileTypeRef = useRef<AnimationPreviewFormat | null>(null);
+  const userSelectedExportTypeRef = useRef(false);
+  const {
+    font,
+    renderedPreview,
+    exportOptions,
+    exportScale,
+    updateFont,
+    updateExportOptions,
+    updateExportScale
+  } = useStudioStore();
   const availableExportFileTypeOptions = showAnimationExports
     ? exportFileTypeOptions
     : exportFileTypeOptions.filter((option) => option.value !== "png-sequence");
@@ -139,6 +160,41 @@ export const TopLeftActions = ({
   const selectedAnimatedScaleLabel = selectedPngSequenceExport ? "Export Scale" : "Video Scale";
   const selectedAnimatedQualityLabel = selectedPngSequenceExport ? "Animation Quality" : "Video Quality";
   const selectedAnimatedScaleSummaryLabel = selectedPngSequenceExport ? "Export scale" : "Video scale";
+  const selectedPreviewFormat = isAnimationPreviewFormat(fileType) ? fileType : null;
+  const renderedPreviewCache = getRenderedPreviewCache(renderedPreview.cacheKey);
+  const renderedPreviewStatusCanExport =
+    renderedPreview.status === "ready" || renderedPreview.status === "playing" || renderedPreview.status === "paused";
+  const finalPreviewCacheReusable = Boolean(
+    showAnimationExports &&
+      selectedPreviewFormat &&
+      renderedPreviewStatusCanExport &&
+      renderedPreview.quality === "final" &&
+      renderedPreview.previewFormat === selectedPreviewFormat &&
+      renderedPreviewCache &&
+      renderedPreviewCache.quality === "final" &&
+      renderedPreviewCache.previewFormat === selectedPreviewFormat &&
+      renderedPreviewCache.frames.length === renderedPreview.frameCount &&
+      !(selectedAnimatedVideoExport && exportOptions.transparentBackground)
+  );
+  const finalPreviewCacheMessage =
+    showAnimationExports && selectedPreviewFormat
+      ? finalPreviewCacheReusable
+        ? "Ready to export from preview"
+        : renderedPreview.status === "stale"
+          ? "Preview outdated - render again"
+          : renderedPreview.status === "rendering"
+            ? `Rendering ${animationPreviewFormatLabels[renderedPreview.previewFormat]} preview`
+            : renderedPreview.status === "error"
+              ? "Preview cache unavailable. Export will render again."
+              : renderedPreviewCache && renderedPreview.previewFormat !== selectedPreviewFormat
+                ? "Preview cache not compatible. Export will render again."
+                : selectedAnimatedVideoExport &&
+                    exportOptions.transparentBackground &&
+                    renderedPreviewCache?.previewFormat === selectedPreviewFormat
+                  ? "Preview cache not compatible with transparent video. Export will render again."
+                  : null
+      : null;
+  const gifPreviewNote = showAnimationExports && fileType === "gif" ? "GIF export may reduce colors." : null;
   const mp4HighResolutionWarning =
     fileType === "mp4" &&
     showAnimatedControls &&
@@ -197,6 +253,26 @@ export const TopLeftActions = ({
       setFileType("png");
     }
   }, [fileType, showAnimationExports]);
+
+  useEffect(() => {
+    if (!showAnimationExports) {
+      previewSyncedFileTypeRef.current = null;
+      userSelectedExportTypeRef.current = false;
+      return;
+    }
+
+    const targetFileType = renderedPreview.previewFormat;
+    const previousSyncedFileType = previewSyncedFileTypeRef.current;
+    const shouldSync =
+      !userSelectedExportTypeRef.current ||
+      (previousSyncedFileType !== null && fileType === previousSyncedFileType);
+
+    if (shouldSync && fileType !== targetFileType) {
+      setFileType(targetFileType);
+      userSelectedExportTypeRef.current = false;
+    }
+    previewSyncedFileTypeRef.current = targetFileType;
+  }, [fileType, renderedPreview.previewFormat, showAnimationExports]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -286,7 +362,11 @@ export const TopLeftActions = ({
                 label="File type"
                 value={fileType}
                 options={availableExportFileTypeOptions}
-                onChange={(value) => setFileType(value as ExportFileType)}
+                onChange={(value) => {
+                  const nextFileType = value as ExportFileType;
+                  userSelectedExportTypeRef.current = nextFileType !== renderedPreview.previewFormat;
+                  setFileType(nextFileType);
+                }}
               />
             </div>
             <div className="w-28">
@@ -440,6 +520,16 @@ export const TopLeftActions = ({
                   <div className="mt-1 flex items-center justify-between gap-3 border-t border-white/[0.05] pt-1">
                     <span>Estimated {fileType.toUpperCase()}</span>
                     <span className="tabular-nums text-zinc-300">{formatBytes(selectedEstimate)}</span>
+                  </div>
+                )}
+                {(finalPreviewCacheMessage || gifPreviewNote) && (
+                  <div className="mt-1 border-t border-white/[0.05] pt-1 text-zinc-500">
+                    {finalPreviewCacheMessage && (
+                      <div className={finalPreviewCacheReusable ? "text-signal" : "text-zinc-500"}>
+                        {finalPreviewCacheMessage}
+                      </div>
+                    )}
+                    {gifPreviewNote && <div>{gifPreviewNote}</div>}
                   </div>
                 )}
               </div>

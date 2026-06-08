@@ -5,7 +5,11 @@ import type { ImageGlyphAtlas } from "../atlas/imageGlyphAtlas";
 import { normalizeCharacterSet } from "../ascii/charset";
 import { createAnimatedImageRenderer, type AnimatedImageRenderer } from "../processing/animateImage";
 import { generateRenderGrid } from "../processing/renderGrid";
-import { createLivePreviewFrameCacheKey, LivePreviewFrameCache } from "./livePreviewFrameCache";
+import {
+  createLivePreviewFrameCacheKey,
+  LivePreviewFrameCache,
+  type LivePreviewFrameCacheMetadata
+} from "./livePreviewFrameCache";
 import { clearLivePreviewSourceProxyCache, resolveLivePreviewSourceProxy } from "./livePreviewSourceProxy";
 import { resolveAnimatedProcessingSettings } from "./animationEffects";
 import { normalizeAnimationFps, resolveAnimationFrameCount } from "./animationTiming";
@@ -27,11 +31,13 @@ import type {
   FrameSettings,
   GlyphMetric,
   ImageSettings,
+  LivePreviewOptimizationLevel,
   RenderGrid,
   WorkerRenderOptions
 } from "./types";
 
 export interface LivePreviewStats {
+  phase: "optimizing" | "updating" | "live" | "testing";
   targetFps: number;
   actualFps: number;
   averageRenderMs: number;
@@ -55,6 +61,7 @@ export interface LivePreviewStats {
 interface AnimatedAsciiPreviewArgs {
   active: boolean;
   paused?: boolean;
+  editPreviewActive?: boolean;
   renderer: AnimatedImageRenderer | null;
   sourceImageData?: ImageData | null;
   backgroundCanvasRef: RefObject<HTMLCanvasElement>;
@@ -69,6 +76,7 @@ interface AnimatedAsciiPreviewArgs {
   breakup: BreakupSettings;
   color: ColorSettings;
   animation: AnimationSettings;
+  optimizationLevel?: LivePreviewOptimizationLevel;
   glyphMetrics: GlyphMetric[];
   onPerformanceWarning?: (message: string) => void;
   onLivePreviewStats?: (stats: LivePreviewStats | null) => void;
@@ -80,13 +88,130 @@ const createPreviewClockKey = (animation: AnimationSettings) =>
     animation.fps
   ].join(":");
 
-const LIVE_PREVIEW_SCALE_STOPS = [1, 0.75, 0.5, 0.425, 0.33, 0.25] as const;
-const LIVE_PREVIEW_SOURCE_SCALE_STOPS = [1, 0.75, 0.5, 0.33, 0.25] as const;
-const LIVE_PREVIEW_STRIP_SIZE_STOPS = [1, 2, 4, 8, 12] as const;
-const LIVE_PREVIEW_MIN_SHORT_SIDE = 280;
+const LIVE_PREVIEW_SCALE_STOPS = [1, 0.75, 0.66, 0.5, 0.425, 0.33, 0.25, 0.2, 0.16] as const;
+const LIVE_PREVIEW_SOURCE_SCALE_STOPS = [1, 0.75, 0.5, 0.33, 0.25, 0.2, 0.16] as const;
+const LIVE_PREVIEW_STRIP_SIZE_STOPS = [1, 2, 4, 8, 12, 16, 24] as const;
 const LIVE_PREVIEW_STATS_INTERVAL_MS = 420;
 const LIVE_PREVIEW_SCALE_COOLDOWN_MS = 1000;
-const LIVE_PREVIEW_UPSCALE_SETTLE_MS = 4000;
+const LIVE_PREVIEW_EDIT_SETTLE_MS = 520;
+const LIVE_PREVIEW_DEFAULT_READY_CACHE_RATIO = 0.5;
+const LIVE_PREVIEW_SHORT_LOOP_CACHE_FRAME_LIMIT = 48;
+const LIVE_PREVIEW_STABLE_PROFILE_TTL_MS = 1000 * 60 * 20;
+const LIVE_PREVIEW_SIMILAR_PIXEL_RATIO_MIN = 0.45;
+const LIVE_PREVIEW_SIMILAR_PIXEL_RATIO_MAX = 2.2;
+
+const livePreviewOptimizationProfiles: Record<
+  LivePreviewOptimizationLevel,
+  {
+    minPreviewScale: number;
+    minSourceScale: number;
+    maxStripSize: number;
+    minShortSide: number;
+    initialMaxSide: number;
+    initialPixelBudgetSide: number;
+    initialWaveStripSize: number;
+    cacheReadyRatio: number;
+    stableFpsFactor: number;
+    adaptivePreviewScale: boolean;
+    sourceProxyEnabled: boolean;
+    stripSizeEnabled: boolean;
+    frameCacheEnabled: boolean;
+  }
+> = {
+  "super-fast": {
+    minPreviewScale: 0.16,
+    minSourceScale: 0.2,
+    maxStripSize: 24,
+    minShortSide: 200,
+    initialMaxSide: 240,
+    initialPixelBudgetSide: 220,
+    initialWaveStripSize: 8,
+    cacheReadyRatio: 0.75,
+    stableFpsFactor: 0.9,
+    adaptivePreviewScale: true,
+    sourceProxyEnabled: true,
+    stripSizeEnabled: true,
+    frameCacheEnabled: true
+  },
+  fast: {
+    minPreviewScale: 0.25,
+    minSourceScale: 0.25,
+    maxStripSize: 12,
+    minShortSide: 280,
+    initialMaxSide: 420,
+    initialPixelBudgetSide: 360,
+    initialWaveStripSize: 2,
+    cacheReadyRatio: 0.6,
+    stableFpsFactor: 0.82,
+    adaptivePreviewScale: true,
+    sourceProxyEnabled: true,
+    stripSizeEnabled: true,
+    frameCacheEnabled: true
+  },
+  balanced: {
+    minPreviewScale: 0.33,
+    minSourceScale: 0.33,
+    maxStripSize: 8,
+    minShortSide: 360,
+    initialMaxSide: 620,
+    initialPixelBudgetSide: 540,
+    initialWaveStripSize: 2,
+    cacheReadyRatio: LIVE_PREVIEW_DEFAULT_READY_CACHE_RATIO,
+    stableFpsFactor: 0.78,
+    adaptivePreviewScale: true,
+    sourceProxyEnabled: true,
+    stripSizeEnabled: true,
+    frameCacheEnabled: true
+  },
+  high: {
+    minPreviewScale: 0.5,
+    minSourceScale: 0.5,
+    maxStripSize: 4,
+    minShortSide: 560,
+    initialMaxSide: 900,
+    initialPixelBudgetSide: 810,
+    initialWaveStripSize: 1,
+    cacheReadyRatio: 0.25,
+    stableFpsFactor: 0.55,
+    adaptivePreviewScale: true,
+    sourceProxyEnabled: true,
+    stripSizeEnabled: true,
+    frameCacheEnabled: true
+  },
+  off: {
+    minPreviewScale: 1,
+    minSourceScale: 1,
+    maxStripSize: 1,
+    minShortSide: 0,
+    initialMaxSide: Number.POSITIVE_INFINITY,
+    initialPixelBudgetSide: Number.POSITIVE_INFINITY,
+    initialWaveStripSize: 1,
+    cacheReadyRatio: 0,
+    stableFpsFactor: 0,
+    adaptivePreviewScale: false,
+    sourceProxyEnabled: false,
+    stripSizeEnabled: false,
+    frameCacheEnabled: true
+  }
+};
+
+const normalizeLivePreviewOptimizationLevel = (
+  level: LivePreviewOptimizationLevel | "speed" | "sharp" | null | undefined
+): LivePreviewOptimizationLevel =>
+  level === "super-fast"
+    ? "super-fast"
+    : level === "fast" || level === "speed"
+      ? "fast"
+      : level === "balanced"
+        ? "balanced"
+        : level === "high" || level === "sharp"
+          ? "high"
+          : level === "off"
+            ? "off"
+            : "balanced";
+
+const getLivePreviewOptimizationProfile = (level: LivePreviewOptimizationLevel | null | undefined) =>
+  livePreviewOptimizationProfiles[normalizeLivePreviewOptimizationLevel(level)];
 
 interface LivePreviewScaleState {
   resetKey: string;
@@ -97,6 +222,8 @@ interface LivePreviewScaleState {
   healthyWindows: number;
   lastScaleChangedAt: number;
   lastSettingsChangedAt: number;
+  transitionUntil: number;
+  transitionReason: "optimizing" | "updating" | null;
 }
 
 interface LivePreviewPerformance {
@@ -112,10 +239,31 @@ interface LivePreviewPerformance {
   stripSize: number;
 }
 
+interface StableLivePreviewProfile {
+  optimizationLevel: LivePreviewOptimizationLevel;
+  scaleIndex: number;
+  sourceScaleIndex: number;
+  stripSizeIndex: number;
+  previewScale: number;
+  sourceScale: number;
+  stripSize: number;
+  actualFps: number;
+  targetFps: number;
+  averageRenderMs: number;
+  outputWidth: number;
+  outputHeight: number;
+  sourceWidth: number;
+  sourceHeight: number;
+  updatedAt: number;
+}
+
+let lastStableLivePreviewProfile: StableLivePreviewProfile | null = null;
+
 const createPreviewGeometryKey = (
   baseGrid: RenderGrid,
   ascii: AsciiSettings,
-  animation: AnimationSettings
+  animation: AnimationSettings,
+  optimizationLevel: LivePreviewOptimizationLevel
 ) =>
   [
     baseGrid.columns,
@@ -137,7 +285,8 @@ const createPreviewGeometryKey = (
     ascii.spacingY,
     ascii.cellSpacing,
     animation.type,
-    animation.fps
+    animation.fps,
+    normalizeLivePreviewOptimizationLevel(optimizationLevel)
   ].join(":");
 
 const createPreviewVisualKey = (
@@ -174,35 +323,196 @@ const createInitialScaleState = (resetKey = "", now = 0): LivePreviewScaleState 
   slowWindows: 0,
   healthyWindows: 0,
   lastScaleChangedAt: 0,
-  lastSettingsChangedAt: now
+  lastSettingsChangedAt: now,
+  transitionUntil: 0,
+  transitionReason: null
 });
+
+const resolveScaleIndexForScale = (
+  baseGrid: RenderGrid,
+  desiredScale: number,
+  optimizationLevel: LivePreviewOptimizationLevel
+) => {
+  const allowedScales = getAllowedScaleStops(baseGrid, optimizationLevel);
+  const clampedScale = Math.min(1, Math.max(0.05, desiredScale));
+  const exactIndex = allowedScales.findIndex((scale) => Math.abs(scale - clampedScale) < 0.001);
+  if (exactIndex >= 0) {
+    return exactIndex;
+  }
+  const lowerOrEqualIndex = allowedScales.findIndex((scale) => scale <= clampedScale + 0.001);
+  return lowerOrEqualIndex >= 0 ? lowerOrEqualIndex : allowedScales.length - 1;
+};
+
+const resolveStopIndexForValue = <T extends readonly number[]>(stops: T, desiredValue: number) => {
+  const exactIndex = stops.findIndex((value) => Math.abs(value - desiredValue) < 0.001);
+  if (exactIndex >= 0) {
+    return exactIndex;
+  }
+  const lowerOrEqualIndex = stops.findIndex((value) => value <= desiredValue + 0.001);
+  return lowerOrEqualIndex >= 0 ? lowerOrEqualIndex : stops.length - 1;
+};
+
+const getAllowedSourceScaleStops = (optimizationLevel: LivePreviewOptimizationLevel) => {
+  const profile = getLivePreviewOptimizationProfile(optimizationLevel);
+  if (!profile.sourceProxyEnabled) {
+    return [1];
+  }
+  const allowed = LIVE_PREVIEW_SOURCE_SCALE_STOPS.filter((scale) => scale >= profile.minSourceScale);
+  return allowed.length ? allowed : [1];
+};
+
+const getAllowedStripSizeStops = (optimizationLevel: LivePreviewOptimizationLevel) => {
+  const profile = getLivePreviewOptimizationProfile(optimizationLevel);
+  if (!profile.stripSizeEnabled) {
+    return [1];
+  }
+  const allowed = LIVE_PREVIEW_STRIP_SIZE_STOPS.filter((stripSize) => stripSize <= profile.maxStripSize);
+  return allowed.length ? allowed : [1];
+};
+
+export const estimateInitialLivePreviewScale = (
+  outputWidth: number,
+  outputHeight: number,
+  targetFps: number,
+  optimizationLevel: LivePreviewOptimizationLevel = "balanced"
+) => {
+  const width = Math.max(1, Math.round(outputWidth));
+  const height = Math.max(1, Math.round(outputHeight));
+  const fps = normalizeAnimationFps(targetFps);
+  const profile = getLivePreviewOptimizationProfile(optimizationLevel);
+  if (!profile.adaptivePreviewScale) {
+    return 1;
+  }
+  const fpsScale =
+    fps >= 50
+      ? 0.78
+      : fps >= 30
+        ? 0.88
+        : fps >= 24
+          ? 1
+          : 1.15;
+  const maxSide = profile.initialMaxSide * fpsScale;
+  const pixelBudgetSide = profile.initialPixelBudgetSide * fpsScale;
+  const pixelBudget = pixelBudgetSide * pixelBudgetSide;
+  return Math.min(
+    1,
+    Math.max(
+      profile.minPreviewScale,
+      Math.min(
+        maxSide / Math.max(width, height),
+        Math.sqrt(pixelBudget / Math.max(1, width * height))
+      )
+    )
+  );
+};
+
+const createEstimatedScaleState = (
+  resetKey: string,
+  baseGrid: RenderGrid,
+  animation: AnimationSettings,
+  sourceImageData: ImageData | null | undefined,
+  now: number,
+  optimizationLevel: LivePreviewOptimizationLevel
+): LivePreviewScaleState => {
+  const outputWidth = Math.max(1, Math.round(baseGrid.width));
+  const outputHeight = Math.max(1, Math.round(baseGrid.height));
+  const sourceWidth = Math.max(1, Math.round(sourceImageData?.width ?? baseGrid.sourceWidth));
+  const sourceHeight = Math.max(1, Math.round(sourceImageData?.height ?? baseGrid.sourceHeight));
+  const targetFps = normalizeAnimationFps(animation.fps);
+  const previous = lastStableLivePreviewProfile;
+  const previousStillFresh =
+    previous &&
+    previous.optimizationLevel === normalizeLivePreviewOptimizationLevel(optimizationLevel) &&
+    now - previous.updatedAt <= LIVE_PREVIEW_STABLE_PROFILE_TTL_MS &&
+    Math.abs(previous.targetFps - targetFps) <= Math.max(2, targetFps * 0.15);
+  const currentPixels = outputWidth * outputHeight;
+  const previousPixels = Math.max(1, (previous?.outputWidth ?? outputWidth) * (previous?.outputHeight ?? outputHeight));
+  const pixelRatio = currentPixels / previousPixels;
+  const sourcePixels = sourceWidth * sourceHeight;
+  const previousSourcePixels = Math.max(1, (previous?.sourceWidth ?? sourceWidth) * (previous?.sourceHeight ?? sourceHeight));
+  const sourcePixelRatio = sourcePixels / previousSourcePixels;
+  let desiredPreviewScale = estimateInitialLivePreviewScale(outputWidth, outputHeight, targetFps, optimizationLevel);
+  const allowedSourceScaleStops = getAllowedSourceScaleStops(optimizationLevel);
+  const allowedStripSizeStops = getAllowedStripSizeStops(optimizationLevel);
+  const optimizationProfile = getLivePreviewOptimizationProfile(optimizationLevel);
+  let sourceScaleIndex = optimizationProfile.sourceProxyEnabled
+    ? resolveStopIndexForValue(
+        allowedSourceScaleStops,
+        Math.min(1, Math.max(optimizationProfile.minSourceScale, desiredPreviewScale))
+      )
+    : 0;
+  let stripSizeIndex =
+    optimizationProfile.stripSizeEnabled && animation.type === "wave" && targetFps >= 24
+      ? resolveStopIndexForValue(allowedStripSizeStops, optimizationProfile.initialWaveStripSize)
+      : 0;
+
+  if (
+    previousStillFresh &&
+    previous &&
+    pixelRatio >= LIVE_PREVIEW_SIMILAR_PIXEL_RATIO_MIN &&
+    pixelRatio <= LIVE_PREVIEW_SIMILAR_PIXEL_RATIO_MAX &&
+    sourcePixelRatio >= LIVE_PREVIEW_SIMILAR_PIXEL_RATIO_MIN &&
+    sourcePixelRatio <= LIVE_PREVIEW_SIMILAR_PIXEL_RATIO_MAX
+  ) {
+    desiredPreviewScale = previous.previewScale * Math.sqrt(previousPixels / currentPixels);
+    sourceScaleIndex = previous.sourceScaleIndex;
+    stripSizeIndex = animation.type === "wave" ? previous.stripSizeIndex : 0;
+  }
+
+  return {
+    resetKey,
+    scaleIndex: resolveScaleIndexForScale(baseGrid, desiredPreviewScale, optimizationLevel),
+    sourceScaleIndex: Math.min(sourceScaleIndex, allowedSourceScaleStops.length - 1),
+    stripSizeIndex: Math.min(stripSizeIndex, allowedStripSizeStops.length - 1),
+    slowWindows: 0,
+    healthyWindows: 0,
+    lastScaleChangedAt: now,
+    lastSettingsChangedAt: now,
+    transitionUntil: now + LIVE_PREVIEW_EDIT_SETTLE_MS,
+    transitionReason: "optimizing"
+  };
+};
 
 const warmStartScaleState = (
   resetKey: string,
   previous: LivePreviewScaleState,
   baseGrid: RenderGrid,
-  now: number
+  now: number,
+  optimizationLevel: LivePreviewOptimizationLevel
 ): LivePreviewScaleState => {
-  const allowedScales = getAllowedScaleStops(baseGrid);
+  const allowedScales = getAllowedScaleStops(baseGrid, optimizationLevel);
+  const allowedSourceScaleStops = getAllowedSourceScaleStops(optimizationLevel);
+  const allowedStripSizeStops = getAllowedStripSizeStops(optimizationLevel);
   return {
     resetKey,
     scaleIndex: Math.min(previous.scaleIndex, allowedScales.length - 1),
-    sourceScaleIndex: Math.min(previous.sourceScaleIndex, LIVE_PREVIEW_SOURCE_SCALE_STOPS.length - 1),
-    stripSizeIndex: Math.min(previous.stripSizeIndex, LIVE_PREVIEW_STRIP_SIZE_STOPS.length - 1),
+    sourceScaleIndex: Math.min(previous.sourceScaleIndex, allowedSourceScaleStops.length - 1),
+    stripSizeIndex: Math.min(previous.stripSizeIndex, allowedStripSizeStops.length - 1),
     slowWindows: 0,
     healthyWindows: 0,
     lastScaleChangedAt: previous.lastScaleChangedAt,
-    lastSettingsChangedAt: now
+    lastSettingsChangedAt: now,
+    transitionUntil: now + LIVE_PREVIEW_EDIT_SETTLE_MS,
+    transitionReason: "optimizing"
   };
 };
 
-const getAllowedScaleStops = (baseGrid: RenderGrid) => {
+const getAllowedScaleStops = (
+  baseGrid: RenderGrid,
+  optimizationLevel: LivePreviewOptimizationLevel
+) => {
   const outputWidth = Math.max(1, Math.round(baseGrid.width));
   const outputHeight = Math.max(1, Math.round(baseGrid.height));
   const shortSide = Math.min(outputWidth, outputHeight);
-  const minimumShortSide = Math.min(shortSide, LIVE_PREVIEW_MIN_SHORT_SIDE);
+  const profile = getLivePreviewOptimizationProfile(optimizationLevel);
+  if (!profile.adaptivePreviewScale) {
+    return [1];
+  }
+  const minimumShortSide = Math.min(shortSide, profile.minShortSide);
   const allowed = LIVE_PREVIEW_SCALE_STOPS.filter(
-    (scale) => shortSide * scale >= minimumShortSide || Math.abs(scale - 1) < 0.001
+    (scale) =>
+      (scale >= profile.minPreviewScale && shortSide * scale >= minimumShortSide) ||
+      Math.abs(scale - 1) < 0.001
   );
   return allowed.length ? allowed : [1];
 };
@@ -210,20 +520,23 @@ const getAllowedScaleStops = (baseGrid: RenderGrid) => {
 const resolveLivePreviewPerformance = (
   baseGrid: RenderGrid,
   animation: AnimationSettings,
-  scaleState: LivePreviewScaleState
+  scaleState: LivePreviewScaleState,
+  optimizationLevel: LivePreviewOptimizationLevel
 ): LivePreviewPerformance => {
   const outputWidth = Math.max(1, Math.round(baseGrid.width));
   const outputHeight = Math.max(1, Math.round(baseGrid.height));
-  const allowedScales = getAllowedScaleStops(baseGrid);
+  const allowedScales = getAllowedScaleStops(baseGrid, optimizationLevel);
+  const allowedSourceScaleStops = getAllowedSourceScaleStops(optimizationLevel);
+  const allowedStripSizeStops = getAllowedStripSizeStops(optimizationLevel);
   const previewScale = allowedScales[Math.min(scaleState.scaleIndex, allowedScales.length - 1)] ?? 1;
   const sourceScale =
-    LIVE_PREVIEW_SOURCE_SCALE_STOPS[
-      Math.min(scaleState.sourceScaleIndex, LIVE_PREVIEW_SOURCE_SCALE_STOPS.length - 1)
+    allowedSourceScaleStops[
+      Math.min(scaleState.sourceScaleIndex, allowedSourceScaleStops.length - 1)
     ] ?? 1;
   const stripSize =
     animation.type === "wave"
-      ? LIVE_PREVIEW_STRIP_SIZE_STOPS[
-          Math.min(scaleState.stripSizeIndex, LIVE_PREVIEW_STRIP_SIZE_STOPS.length - 1)
+      ? allowedStripSizeStops[
+          Math.min(scaleState.stripSizeIndex, allowedStripSizeStops.length - 1)
         ] ?? 1
       : 1;
   return {
@@ -240,6 +553,102 @@ const resolveLivePreviewPerformance = (
   };
 };
 
+const createLivePreviewStats = (
+  phase: LivePreviewStats["phase"],
+  performanceProfile: LivePreviewPerformance,
+  values: Partial<
+    Pick<
+      LivePreviewStats,
+      | "actualFps"
+      | "averageRenderMs"
+      | "droppedFrames"
+      | "isSlow"
+      | "cacheEnabled"
+      | "cacheFrames"
+      | "cacheFrameCount"
+      | "cacheComplete"
+    >
+  > = {}
+): LivePreviewStats => ({
+  phase,
+  targetFps: performanceProfile.targetFps,
+  actualFps: values.actualFps ?? 0,
+  averageRenderMs: values.averageRenderMs ?? 0,
+  droppedFrames: values.droppedFrames ?? 0,
+  isSlow: values.isSlow ?? false,
+  previewScale: performanceProfile.previewScale,
+  previewWidth: performanceProfile.previewWidth,
+  previewHeight: performanceProfile.previewHeight,
+  outputWidth: performanceProfile.outputWidth,
+  outputHeight: performanceProfile.outputHeight,
+  sourceScale: performanceProfile.sourceScale,
+  proxySourceWidth: performanceProfile.proxySourceWidth,
+  proxySourceHeight: performanceProfile.proxySourceHeight,
+  stripSize: performanceProfile.stripSize,
+  cacheEnabled: values.cacheEnabled ?? false,
+  cacheFrames: values.cacheFrames ?? 0,
+  cacheFrameCount: values.cacheFrameCount ?? 0,
+  cacheComplete: values.cacheComplete ?? false
+});
+
+const rememberStableLivePreviewProfile = (
+  scaleState: LivePreviewScaleState,
+  profile: LivePreviewPerformance,
+  optimizationLevel: LivePreviewOptimizationLevel,
+  sourceWidth: number,
+  sourceHeight: number,
+  actualFps: number,
+  averageRenderMs: number,
+  now: number
+) => {
+  const optimizationProfile = getLivePreviewOptimizationProfile(optimizationLevel);
+  if (
+    actualFps < profile.targetFps * optimizationProfile.stableFpsFactor ||
+    profile.targetFps - actualFps > Math.max(2, profile.targetFps * (1 - optimizationProfile.stableFpsFactor))
+  ) {
+    return;
+  }
+  lastStableLivePreviewProfile = {
+    optimizationLevel: normalizeLivePreviewOptimizationLevel(optimizationLevel),
+    scaleIndex: scaleState.scaleIndex,
+    sourceScaleIndex: scaleState.sourceScaleIndex,
+    stripSizeIndex: scaleState.stripSizeIndex,
+    previewScale: profile.previewScale,
+    sourceScale: profile.sourceScale,
+    stripSize: profile.stripSize,
+    actualFps,
+    targetFps: profile.targetFps,
+    averageRenderMs,
+    outputWidth: profile.outputWidth,
+    outputHeight: profile.outputHeight,
+    sourceWidth: Math.max(1, Math.round(sourceWidth)),
+    sourceHeight: Math.max(1, Math.round(sourceHeight)),
+    updatedAt: now
+  };
+};
+
+const isLivePreviewCacheReadyForDisplay = (
+  metadata: LivePreviewFrameCacheMetadata | null,
+  optimizationLevel: LivePreviewOptimizationLevel
+) => {
+  if (!metadata?.enabled) {
+    return true;
+  }
+  if (metadata.complete) {
+    return true;
+  }
+  const frameCount = Math.max(1, metadata.frameCount);
+  const optimizationProfile = getLivePreviewOptimizationProfile(optimizationLevel);
+  if (optimizationProfile.cacheReadyRatio <= 0) {
+    return true;
+  }
+  const minimumFrames =
+    frameCount <= LIVE_PREVIEW_SHORT_LOOP_CACHE_FRAME_LIMIT
+      ? frameCount
+      : Math.max(2, Math.ceil(frameCount * optimizationProfile.cacheReadyRatio));
+  return metadata.cachedFrames >= minimumFrames;
+};
+
 const adaptLivePreviewScale = (
   baseGrid: RenderGrid,
   scaleState: LivePreviewScaleState,
@@ -248,13 +657,27 @@ const adaptLivePreviewScale = (
   averageRenderMs: number,
   canUseSourceProxy: boolean,
   canUseStripSize: boolean,
-  now: number
-) => {
-  const allowedScales = getAllowedScaleStops(baseGrid);
+  now: number,
+  optimizationLevel: LivePreviewOptimizationLevel
+): boolean => {
+  const allowedScales = getAllowedScaleStops(baseGrid, optimizationLevel);
+  const allowedSourceScaleStops = getAllowedSourceScaleStops(optimizationLevel);
+  const allowedStripSizeStops = getAllowedStripSizeStops(optimizationLevel);
   const frameBudgetMs = 1000 / Math.max(1, targetFps);
   const canAdjust = now - scaleState.lastScaleChangedAt >= LIVE_PREVIEW_SCALE_COOLDOWN_MS;
-  const canUpscale = now - scaleState.lastSettingsChangedAt >= LIVE_PREVIEW_UPSCALE_SETTLE_MS;
-  const isFarBelowTarget = actualFps < targetFps * 0.65 && targetFps - actualFps > 1;
+  const optimizationProfile = getLivePreviewOptimizationProfile(optimizationLevel);
+  if (
+    !optimizationProfile.adaptivePreviewScale &&
+    !optimizationProfile.sourceProxyEnabled &&
+    !optimizationProfile.stripSizeEnabled
+  ) {
+    scaleState.slowWindows = 0;
+    scaleState.healthyWindows = 0;
+    return false;
+  }
+  const isFarBelowTarget =
+    actualFps < targetFps * optimizationProfile.stableFpsFactor &&
+    targetFps - actualFps > Math.max(1, targetFps * (1 - optimizationProfile.stableFpsFactor) * 0.5);
   const isHealthy = actualFps > targetFps * 0.9 && averageRenderMs < frameBudgetMs * 0.65;
 
   if (isFarBelowTarget) {
@@ -268,65 +691,54 @@ const adaptLivePreviewScale = (
     scaleState.healthyWindows = 0;
   }
 
-  if (canAdjust && scaleState.slowWindows >= 2 && scaleState.scaleIndex < allowedScales.length - 1) {
-    scaleState.scaleIndex += 1;
-    scaleState.slowWindows = 0;
-    scaleState.healthyWindows = 0;
-    scaleState.lastScaleChangedAt = now;
-    return;
-  }
-
   if (
     canAdjust &&
     scaleState.slowWindows >= 2 &&
-    scaleState.scaleIndex >= allowedScales.length - 1 &&
-    canUseSourceProxy &&
-    scaleState.sourceScaleIndex < LIVE_PREVIEW_SOURCE_SCALE_STOPS.length - 1
-  ) {
-    scaleState.sourceScaleIndex += 1;
-    scaleState.slowWindows = 0;
-    scaleState.healthyWindows = 0;
-    scaleState.lastScaleChangedAt = now;
-    return;
-  }
-
-  if (
-    canAdjust &&
-    scaleState.slowWindows >= 2 &&
-    scaleState.scaleIndex >= allowedScales.length - 1 &&
-    (!canUseSourceProxy || scaleState.sourceScaleIndex >= LIVE_PREVIEW_SOURCE_SCALE_STOPS.length - 1) &&
+    optimizationProfile.stripSizeEnabled &&
     canUseStripSize &&
-    scaleState.stripSizeIndex < LIVE_PREVIEW_STRIP_SIZE_STOPS.length - 1
+    scaleState.stripSizeIndex < allowedStripSizeStops.length - 1
   ) {
     scaleState.stripSizeIndex += 1;
     scaleState.slowWindows = 0;
     scaleState.healthyWindows = 0;
     scaleState.lastScaleChangedAt = now;
-    return;
+    scaleState.transitionUntil = now + LIVE_PREVIEW_EDIT_SETTLE_MS;
+    scaleState.transitionReason = "optimizing";
+    return true;
   }
 
-  if (canAdjust && canUpscale && scaleState.healthyWindows >= 5 && scaleState.stripSizeIndex > 0) {
-    scaleState.stripSizeIndex -= 1;
+  if (
+    canAdjust &&
+    scaleState.slowWindows >= 2 &&
+    optimizationProfile.sourceProxyEnabled &&
+    canUseSourceProxy &&
+    scaleState.sourceScaleIndex < allowedSourceScaleStops.length - 1
+  ) {
+    scaleState.sourceScaleIndex += 1;
     scaleState.slowWindows = 0;
     scaleState.healthyWindows = 0;
     scaleState.lastScaleChangedAt = now;
-    return;
+    scaleState.transitionUntil = now + LIVE_PREVIEW_EDIT_SETTLE_MS;
+    scaleState.transitionReason = "optimizing";
+    return true;
   }
 
-  if (canAdjust && canUpscale && scaleState.healthyWindows >= 5 && scaleState.sourceScaleIndex > 0) {
-    scaleState.sourceScaleIndex -= 1;
+  if (
+    canAdjust &&
+    scaleState.slowWindows >= 2 &&
+    optimizationProfile.adaptivePreviewScale &&
+    scaleState.scaleIndex < allowedScales.length - 1
+  ) {
+    scaleState.scaleIndex += 1;
     scaleState.slowWindows = 0;
     scaleState.healthyWindows = 0;
     scaleState.lastScaleChangedAt = now;
-    return;
+    scaleState.transitionUntil = now + LIVE_PREVIEW_EDIT_SETTLE_MS;
+    scaleState.transitionReason = "optimizing";
+    return true;
   }
 
-  if (canAdjust && canUpscale && scaleState.healthyWindows >= 5 && scaleState.scaleIndex > 0) {
-    scaleState.scaleIndex -= 1;
-    scaleState.slowWindows = 0;
-    scaleState.healthyWindows = 0;
-    scaleState.lastScaleChangedAt = now;
-  }
+  return false;
 };
 
 const createScaledAtlasKey = (
@@ -387,6 +799,7 @@ const copyPreviewCanvasFrame = (
 export const useAnimatedAsciiPreview = ({
   active,
   paused = false,
+  editPreviewActive = false,
   renderer,
   sourceImageData = null,
   backgroundCanvasRef,
@@ -401,14 +814,17 @@ export const useAnimatedAsciiPreview = ({
   breakup,
   color,
   animation,
+  optimizationLevel = "balanced",
   glyphMetrics,
   onPerformanceWarning,
   onLivePreviewStats
 }: AnimatedAsciiPreviewArgs) => {
+  const livePreviewOptimizationLevel = normalizeLivePreviewOptimizationLevel(optimizationLevel);
   const latestRef = useRef({
     baseGrid,
     atlas,
     imageGlyphAtlas,
+    editPreviewActive,
     sourceImageData,
     font,
     ascii,
@@ -417,6 +833,7 @@ export const useAnimatedAsciiPreview = ({
     breakup,
     color,
     animation,
+    optimizationLevel: livePreviewOptimizationLevel,
     glyphMetrics,
     onPerformanceWarning,
     onLivePreviewStats
@@ -444,6 +861,7 @@ export const useAnimatedAsciiPreview = ({
   const sourceVersionRef = useRef(0);
   const sourceStateRef = useRef<{ source: ImageData | null; width: number; height: number; version: number } | null>(null);
   const frameCacheRef = useRef(new LivePreviewFrameCache());
+  const displayReadyRef = useRef(false);
   const proxyRendererRef = useRef<{
     source: ImageData;
     sourceScale: number;
@@ -458,6 +876,7 @@ export const useAnimatedAsciiPreview = ({
       baseGrid,
       atlas,
       imageGlyphAtlas,
+      editPreviewActive,
       sourceImageData,
       font,
       ascii,
@@ -466,6 +885,7 @@ export const useAnimatedAsciiPreview = ({
       breakup,
       color,
       animation,
+      optimizationLevel: livePreviewOptimizationLevel,
       glyphMetrics,
       onPerformanceWarning,
       onLivePreviewStats
@@ -474,6 +894,7 @@ export const useAnimatedAsciiPreview = ({
     baseGrid,
     atlas,
     imageGlyphAtlas,
+    editPreviewActive,
     sourceImageData,
     font,
     ascii,
@@ -482,6 +903,7 @@ export const useAnimatedAsciiPreview = ({
     breakup,
     color,
     animation,
+    livePreviewOptimizationLevel,
     glyphMetrics,
     onPerformanceWarning,
     onLivePreviewStats
@@ -497,12 +919,13 @@ export const useAnimatedAsciiPreview = ({
       sourceStateRef.current = null;
       proxyRendererRef.current = null;
       frameCacheRef.current.clear();
+      displayReadyRef.current = false;
       clearLivePreviewSourceProxyCache();
       resetEchoFrameHistory(echoHistoryRef.current);
       latestRef.current.onLivePreviewStats?.(null);
       return;
     }
-    if (paused) {
+    if (paused || editPreviewActive) {
       if (pauseStartedAtRef.current === null) {
         pauseStartedAtRef.current = performance.now();
       }
@@ -531,6 +954,7 @@ export const useAnimatedAsciiPreview = ({
   }, [
     active,
     paused,
+    editPreviewActive,
     renderer,
     animation.type,
     animation.fps
@@ -540,7 +964,7 @@ export const useAnimatedAsciiPreview = ({
     const backgroundCanvas = backgroundCanvasRef.current;
     const glyphCanvas = glyphCanvasRef.current;
 
-    if (!active || paused || !renderer || !backgroundCanvas || !glyphCanvas) {
+    if (!active || (paused && !editPreviewActive) || !renderer || !backgroundCanvas || !glyphCanvas) {
       return undefined;
     }
 
@@ -565,6 +989,39 @@ export const useAnimatedAsciiPreview = ({
     temporaryGlyphCanvasRef.current = temporaryGlyphCanvas;
     temporaryEchoCanvasRef.current = temporaryEchoCanvas;
 
+    const bootstrapLatest = latestRef.current;
+    if (bootstrapLatest.baseGrid) {
+      const resetKey = createPreviewGeometryKey(
+        bootstrapLatest.baseGrid,
+        bootstrapLatest.ascii,
+        bootstrapLatest.animation,
+        bootstrapLatest.optimizationLevel
+      );
+      if (scaleStateRef.current.resetKey !== resetKey) {
+        scaleStateRef.current = createEstimatedScaleState(
+          resetKey,
+          bootstrapLatest.baseGrid,
+          bootstrapLatest.animation,
+          bootstrapLatest.sourceImageData,
+          performance.now(),
+          bootstrapLatest.optimizationLevel
+        );
+      }
+      bootstrapLatest.onLivePreviewStats?.(
+        createLivePreviewStats(
+          bootstrapLatest.editPreviewActive || scaleStateRef.current.transitionReason === "updating"
+            ? "updating"
+            : "optimizing",
+          resolveLivePreviewPerformance(
+            bootstrapLatest.baseGrid,
+            bootstrapLatest.animation,
+            scaleStateRef.current,
+            bootstrapLatest.optimizationLevel
+          )
+        )
+      );
+    }
+
     const renderFrame = (now: number) => {
       if (cancelled) {
         return;
@@ -586,6 +1043,7 @@ export const useAnimatedAsciiPreview = ({
             key: clockKey
           };
           lastRenderedPreviewFrameIndex = -1;
+          displayReadyRef.current = false;
           statsStartedAt = now;
           statsRenderedFrames = 0;
           statsAccumulatedRenderMs = 0;
@@ -596,12 +1054,19 @@ export const useAnimatedAsciiPreview = ({
         const elapsedSeconds = (now - clockRef.current.startedAt) / 1000;
         const sourceWidth = latest.sourceImageData?.width ?? 0;
         const sourceHeight = latest.sourceImageData?.height ?? 0;
+        const resetKey = createPreviewGeometryKey(
+          latest.baseGrid,
+          latest.ascii,
+          latest.animation,
+          latest.optimizationLevel
+        );
         const previousSourceState = sourceStateRef.current;
         const sourceChanged =
           !previousSourceState ||
           previousSourceState.source !== latest.sourceImageData ||
           previousSourceState.width !== sourceWidth ||
           previousSourceState.height !== sourceHeight;
+        const geometryChanged = scaleStateRef.current.resetKey !== resetKey;
         if (sourceChanged) {
           if (previousSourceState?.source) {
             clearLivePreviewSourceProxyCache(previousSourceState.source);
@@ -615,25 +1080,40 @@ export const useAnimatedAsciiPreview = ({
           };
           proxyRendererRef.current = null;
           frameCacheRef.current.clear();
-          scaleStateRef.current.lastSettingsChangedAt = now;
-          scaleStateRef.current.slowWindows = 0;
-          scaleStateRef.current.healthyWindows = 0;
+          displayReadyRef.current = false;
+          scaleStateRef.current = createEstimatedScaleState(
+            resetKey,
+            latest.baseGrid,
+            latest.animation,
+            latest.sourceImageData,
+            now,
+            latest.optimizationLevel
+          );
           lastRenderedPreviewFrameIndex = -1;
           resetEchoFrameHistory(echoHistoryRef.current);
         }
 
-        const resetKey = createPreviewGeometryKey(latest.baseGrid, latest.ascii, latest.animation);
-        if (scaleStateRef.current.resetKey !== resetKey) {
+        if (!sourceChanged && geometryChanged) {
           const previousScaleState = scaleStateRef.current;
           scaleStateRef.current = previousScaleState.resetKey
-            ? warmStartScaleState(resetKey, previousScaleState, latest.baseGrid, now)
-            : createInitialScaleState(resetKey, now);
+            ? warmStartScaleState(resetKey, previousScaleState, latest.baseGrid, now, latest.optimizationLevel)
+            : createEstimatedScaleState(
+                resetKey,
+                latest.baseGrid,
+                latest.animation,
+                latest.sourceImageData,
+                now,
+                latest.optimizationLevel
+              );
+          proxyRendererRef.current = null;
+          frameCacheRef.current.clear();
           scaledAtlasRef.current = { key: "", atlas: null };
           statsStartedAt = now;
           statsRenderedFrames = 0;
           statsAccumulatedRenderMs = 0;
           statsDroppedFrames = 0;
           lastRenderedPreviewFrameIndex = -1;
+          displayReadyRef.current = false;
           resetEchoFrameHistory(echoHistoryRef.current);
         }
 
@@ -647,19 +1127,46 @@ export const useAnimatedAsciiPreview = ({
           latest.animation
         );
         if (visualKeyRef.current !== visualKey) {
+          const hadVisualKey = Boolean(visualKeyRef.current);
           visualKeyRef.current = visualKey;
           scaleStateRef.current.lastSettingsChangedAt = now;
           scaleStateRef.current.slowWindows = 0;
           scaleStateRef.current.healthyWindows = 0;
+          if (hadVisualKey) {
+            scaleStateRef.current.transitionUntil = now + LIVE_PREVIEW_EDIT_SETTLE_MS;
+            scaleStateRef.current.transitionReason = "updating";
+          }
           lastRenderedPreviewFrameIndex = -1;
+          displayReadyRef.current = false;
           resetEchoFrameHistory(echoHistoryRef.current);
         }
 
-        const livePreview = resolveLivePreviewPerformance(latest.baseGrid, latest.animation, scaleStateRef.current);
+        const livePreview = resolveLivePreviewPerformance(
+          latest.baseGrid,
+          latest.animation,
+          scaleStateRef.current,
+          latest.optimizationLevel
+        );
+        const activeTransition =
+          latest.editPreviewActive
+            ? "updating"
+            : scaleStateRef.current.transitionReason && now < scaleStateRef.current.transitionUntil
+              ? scaleStateRef.current.transitionReason
+              : null;
+        if (!activeTransition) {
+          scaleStateRef.current.transitionReason = null;
+        }
+        if (activeTransition === "updating") {
+          latest.onLivePreviewStats?.(createLivePreviewStats("updating", livePreview));
+          frameHandle = window.requestAnimationFrame(renderFrame);
+          return;
+        }
         const previewFrameIndex = Math.floor(elapsedSeconds * livePreview.targetFps);
         const cacheFrameCount = resolveAnimationFrameCount(latest.animation.loopDuration, livePreview.targetFps);
         const cacheFrameIndex = ((previewFrameIndex % cacheFrameCount) + cacheFrameCount) % cacheFrameCount;
-        const cacheEnabled = cacheFrameCount > 1 && !isEchoActive(latest.animation);
+        const optimizationProfile = getLivePreviewOptimizationProfile(latest.optimizationLevel);
+        const cacheEnabled =
+          optimizationProfile.frameCacheEnabled && cacheFrameCount > 1 && !isEchoActive(latest.animation);
         const cacheKey = createLivePreviewFrameCacheKey({
           sourceVersion: sourceStateRef.current?.version ?? sourceVersionRef.current,
           sourceWidth,
@@ -676,7 +1183,8 @@ export const useAnimatedAsciiPreview = ({
           sourceScale: livePreview.sourceScale,
           stripSize: livePreview.stripSize,
           proxySourceWidth: livePreview.proxySourceWidth,
-          proxySourceHeight: livePreview.proxySourceHeight
+          proxySourceHeight: livePreview.proxySourceHeight,
+          optimizationLevel: latest.optimizationLevel
         });
         const cacheMetadata = cacheEnabled
           ? frameCacheRef.current.setProfile({
@@ -710,11 +1218,20 @@ export const useAnimatedAsciiPreview = ({
         const cachedFrame = cacheMetadata?.enabled ? frameCacheRef.current.getFrame(cacheFrameIndex) : null;
         if (cachedFrame) {
           resetEchoFrameHistory(echoHistoryRef.current);
-          copyPreviewCanvasFrame(backgroundCanvas, cachedFrame.background, outputWidth, outputHeight, displayWidth, displayHeight);
-          copyPreviewCanvasFrame(glyphCanvas, cachedFrame.glyph, outputWidth, outputHeight, displayWidth, displayHeight);
+          const readyToDisplay =
+            displayReadyRef.current || isLivePreviewCacheReadyForDisplay(cacheMetadata, latest.optimizationLevel);
+          displayReadyRef.current = readyToDisplay;
+          if (readyToDisplay) {
+            copyPreviewCanvasFrame(backgroundCanvas, cachedFrame.background, outputWidth, outputHeight, displayWidth, displayHeight);
+            copyPreviewCanvasFrame(glyphCanvas, cachedFrame.glyph, outputWidth, outputHeight, displayWidth, displayHeight);
+          }
         } else {
           let frameRenderer = renderer;
-          if (latest.sourceImageData && (livePreview.sourceScale < 0.999 || livePreview.stripSize > 1)) {
+          if (
+            optimizationProfile.sourceProxyEnabled &&
+            latest.sourceImageData &&
+            (livePreview.sourceScale < 0.999 || livePreview.stripSize > 1)
+          ) {
             const cachedProxyRenderer = proxyRendererRef.current;
             if (
               !cachedProxyRenderer ||
@@ -806,6 +1323,7 @@ export const useAnimatedAsciiPreview = ({
           });
 
           if (isEchoActive(latest.animation)) {
+            displayReadyRef.current = true;
             copyPreviewCanvasFrame(backgroundCanvas, temporaryBackgroundCanvas, outputWidth, outputHeight, displayWidth, displayHeight);
             compositeEchoFrame({
               targetCanvas: temporaryEchoCanvas,
@@ -817,10 +1335,19 @@ export const useAnimatedAsciiPreview = ({
             pushEchoFrame(echoHistoryRef.current, temporaryGlyphCanvas, latest.animation);
           } else {
             resetEchoFrameHistory(echoHistoryRef.current);
-            copyPreviewCanvasFrame(backgroundCanvas, temporaryBackgroundCanvas, outputWidth, outputHeight, displayWidth, displayHeight);
-            copyPreviewCanvasFrame(glyphCanvas, temporaryGlyphCanvas, outputWidth, outputHeight, displayWidth, displayHeight);
             if (cacheMetadata?.enabled) {
               frameCacheRef.current.storeFrame(cacheFrameIndex, temporaryBackgroundCanvas, temporaryGlyphCanvas);
+            }
+            const readyToDisplay =
+              displayReadyRef.current ||
+              isLivePreviewCacheReadyForDisplay(
+                frameCacheRef.current.getMetadata() ?? cacheMetadata,
+                latest.optimizationLevel
+              );
+            displayReadyRef.current = readyToDisplay;
+            if (readyToDisplay) {
+              copyPreviewCanvasFrame(backgroundCanvas, temporaryBackgroundCanvas, outputWidth, outputHeight, displayWidth, displayHeight);
+              copyPreviewCanvasFrame(glyphCanvas, temporaryGlyphCanvas, outputWidth, outputHeight, displayWidth, displayHeight);
             }
           }
         }
@@ -841,10 +1368,16 @@ export const useAnimatedAsciiPreview = ({
         const actualFps = statsRenderedFrames / statsElapsedSeconds;
         const averageRenderMs = statsAccumulatedRenderMs / Math.max(1, statsRenderedFrames);
         const livePreview = latest.baseGrid
-          ? resolveLivePreviewPerformance(latest.baseGrid, latest.animation, scaleStateRef.current)
+          ? resolveLivePreviewPerformance(
+              latest.baseGrid,
+              latest.animation,
+              scaleStateRef.current,
+              latest.optimizationLevel
+            )
           : null;
+        let profileChanged = false;
         if (livePreview && latest.baseGrid) {
-          adaptLivePreviewScale(
+          profileChanged = adaptLivePreviewScale(
             latest.baseGrid,
             scaleStateRef.current,
             targetFps,
@@ -852,11 +1385,37 @@ export const useAnimatedAsciiPreview = ({
             averageRenderMs,
             Boolean(latest.sourceImageData),
             Boolean(latest.sourceImageData) && latest.animation.type === "wave",
-            performance.now()
+            performance.now(),
+            latest.optimizationLevel
           );
+          if (!profileChanged) {
+            if (displayReadyRef.current) {
+              rememberStableLivePreviewProfile(
+                scaleStateRef.current,
+                livePreview,
+                latest.optimizationLevel,
+                latest.sourceImageData?.width ?? latest.baseGrid.sourceWidth,
+                latest.sourceImageData?.height ?? latest.baseGrid.sourceHeight,
+                actualFps,
+                averageRenderMs,
+                performance.now()
+              );
+            }
+          } else {
+            proxyRendererRef.current = null;
+            scaledAtlasRef.current = { key: "", atlas: null };
+            frameCacheRef.current.clear();
+            displayReadyRef.current = false;
+            lastRenderedPreviewFrameIndex = -1;
+          }
         }
         const updatedLivePreview = latest.baseGrid
-          ? resolveLivePreviewPerformance(latest.baseGrid, latest.animation, scaleStateRef.current)
+          ? resolveLivePreviewPerformance(
+              latest.baseGrid,
+              latest.animation,
+              scaleStateRef.current,
+              latest.optimizationLevel
+            )
           : null;
         const currentProxyRenderer = proxyRendererRef.current;
         const currentProxyMatchesStats =
@@ -864,30 +1423,30 @@ export const useAnimatedAsciiPreview = ({
           Math.abs((currentProxyRenderer?.sourceScale ?? 1) - (updatedLivePreview?.sourceScale ?? 1)) <= 0.001 &&
           (currentProxyRenderer?.stripSize ?? 1) === (updatedLivePreview?.stripSize ?? 1);
         const currentCacheMetadata = frameCacheRef.current.getMetadata();
-        latest.onLivePreviewStats?.({
-          targetFps,
-          actualFps,
-          averageRenderMs,
-          droppedFrames: statsDroppedFrames,
-          isSlow: actualFps < targetFps * 0.8 && targetFps - actualFps > 1,
-          previewScale: updatedLivePreview?.previewScale ?? 1,
-          previewWidth: updatedLivePreview?.previewWidth ?? 1,
-          previewHeight: updatedLivePreview?.previewHeight ?? 1,
-          outputWidth: updatedLivePreview?.outputWidth ?? 1,
-          outputHeight: updatedLivePreview?.outputHeight ?? 1,
-          sourceScale: updatedLivePreview?.sourceScale ?? 1,
-          proxySourceWidth: currentProxyMatchesStats
-            ? currentProxyRenderer?.width ?? 1
-            : updatedLivePreview?.proxySourceWidth ?? 1,
-          proxySourceHeight: currentProxyMatchesStats
-            ? currentProxyRenderer?.height ?? 1
-            : updatedLivePreview?.proxySourceHeight ?? 1,
-          stripSize: updatedLivePreview?.stripSize ?? 1,
-          cacheEnabled: currentCacheMetadata?.enabled ?? false,
-          cacheFrames: currentCacheMetadata?.cachedFrames ?? 0,
-          cacheFrameCount: currentCacheMetadata?.frameCount ?? 0,
-          cacheComplete: currentCacheMetadata?.complete ?? false
-        });
+        if (updatedLivePreview) {
+          const cacheReadyForDisplay = isLivePreviewCacheReadyForDisplay(
+            currentCacheMetadata,
+            latest.optimizationLevel
+          );
+          const profilePhase =
+            scaleStateRef.current.transitionReason && performance.now() < scaleStateRef.current.transitionUntil
+              ? scaleStateRef.current.transitionReason
+              : !displayReadyRef.current || !cacheReadyForDisplay
+                ? "optimizing"
+                : "live";
+          latest.onLivePreviewStats?.(
+            createLivePreviewStats(profilePhase, updatedLivePreview, {
+              actualFps,
+              averageRenderMs,
+              droppedFrames: statsDroppedFrames,
+              isSlow: actualFps < targetFps * 0.8 && targetFps - actualFps > 1,
+              cacheEnabled: currentCacheMetadata?.enabled ?? false,
+              cacheFrames: currentCacheMetadata?.cachedFrames ?? 0,
+              cacheFrameCount: currentCacheMetadata?.frameCount ?? 0,
+              cacheComplete: currentCacheMetadata?.complete ?? false
+            })
+          );
+        }
         statsStartedAt = performance.now();
         statsRenderedFrames = 0;
         statsAccumulatedRenderMs = 0;
@@ -911,6 +1470,7 @@ export const useAnimatedAsciiPreview = ({
   }, [
     active,
     paused,
+    editPreviewActive,
     renderer,
     backgroundCanvasRef,
     glyphCanvasRef

@@ -10,7 +10,12 @@ import type {
   GlyphMetric,
   ImageSettings
 } from "../renderer/types";
+import type {
+  RenderedPreviewCache,
+  RenderedPreviewFrameSource
+} from "../renderer/renderedPreviewModel";
 import { resolveAnimationFrameCount } from "../renderer/animationTiming";
+import { cachedAnimationFrameMatches, renderCachedAnimationFrames } from "./cachedAnimationFrames";
 import { downloadBlob } from "./download";
 import { resolveAnimatedExportFps } from "./exportQuality";
 import { createCanvasPngBlob } from "./exportPng";
@@ -35,6 +40,7 @@ interface ExportAsciiPngSequenceArgs {
   signal?: AbortSignal;
   onProgress?: (progress: number) => void;
   onStatus?: (message: string) => void;
+  cachedFrames?: RenderedPreviewCache<RenderedPreviewFrameSource> | null;
   getFrame: (timeSeconds: number, progress: number, frameIndex: number, totalFrames: number) => ImageData | Promise<ImageData>;
 }
 
@@ -88,6 +94,7 @@ export const exportAsciiPngSequence = async ({
   signal,
   onProgress,
   onStatus,
+  cachedFrames,
   getFrame
 }: ExportAsciiPngSequenceArgs): Promise<PngSequenceExportResult> => {
   const exportQuality = quality ?? exportOptions.animatedExportQuality;
@@ -95,28 +102,39 @@ export const exportAsciiPngSequence = async ({
   const totalFrames = resolveAnimationFrameCount(duration, normalizedFps);
   const files: StoredZipFile[] = [];
   let accumulatedPngBytes = 0;
+  const useCachedFrames = cachedAnimationFrameMatches(cachedFrames, normalizedFps, totalFrames);
 
-  onStatus?.("Preparing PNG sequence");
+  onStatus?.(useCachedFrames ? "Preparing PNG sequence from final preview" : "Preparing PNG sequence");
   onProgress?.(0);
 
-  for await (const renderedFrame of renderAsciiAnimationFrames({
-    duration,
-    fps: normalizedFps,
-    font,
-    ascii,
-    image,
-    frame,
-    breakup,
-    color,
-    exportOptions,
-    exportScale,
-    glyphMetrics,
-    animation,
-    signal,
-    getFrame
-  })) {
+  const renderedFrames = useCachedFrames && cachedFrames
+    ? renderCachedAnimationFrames({
+        cache: cachedFrames,
+        signal,
+        onFrameStart: (frameIndex, frameTotal) => onStatus?.(`Using final preview frame ${frameIndex + 1} of ${frameTotal}`)
+      })
+    : renderAsciiAnimationFrames({
+        duration,
+        fps: normalizedFps,
+        font,
+        ascii,
+        image,
+        frame,
+        breakup,
+        color,
+        exportOptions,
+        exportScale,
+        glyphMetrics,
+        animation,
+        signal,
+        getFrame
+      });
+
+  for await (const renderedFrame of renderedFrames) {
     throwIfAborted(signal);
-    onStatus?.(`Rendering frame ${renderedFrame.frameIndex + 1} of ${renderedFrame.totalFrames}`);
+    if (!useCachedFrames) {
+      onStatus?.(`Rendering frame ${renderedFrame.frameIndex + 1} of ${renderedFrame.totalFrames}`);
+    }
     const pngBlob = await createCanvasPngBlob(renderedFrame.canvas, frame.dpi);
     throwIfAborted(signal);
     const pngBytes = await blobToBytes(pngBlob);

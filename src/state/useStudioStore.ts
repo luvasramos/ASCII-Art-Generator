@@ -1,6 +1,15 @@
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
+import { builtInFonts } from "../fonts/fontRegistry";
 import { builtInCharacterPresets } from "../presets/characterPresets";
+import {
+  isRemovedBuiltInImageGlyphAssetSource,
+  isRemovedBuiltInImageGlyphSourceName
+} from "../glyphs/builtInImageGlyphPresets";
+import {
+  builtinSelectedSvgGlyphPresetName,
+  createBuiltinSelectedSvgGlyphRecords
+} from "../glyphs/builtinSelectedSvgGlyphPreset";
 import { maxImageGlyphs } from "../glyphs/imageGlyphImport";
 import {
   defaultAnimationSettings,
@@ -18,6 +27,7 @@ import {
   clearRenderedPreviewCacheState,
   createRenderedPreviewState,
   markRenderedPreviewStateStale,
+  normalizeAnimationPreviewFormat,
   normalizeRenderedPreviewQuality,
   normalizeRenderedPreviewState,
   type RenderedPreviewPlaybackFrameUpdate,
@@ -28,6 +38,7 @@ import {
 } from "../renderer/renderedPreviewModel";
 import type {
   AnimationPreviewMode,
+  AnimationPreviewFormat,
   AnimationSettings,
   AspectRatioId,
   AsciiSettings,
@@ -39,6 +50,7 @@ import type {
   FrameSettings,
   ImageGlyphRecord,
   ImageSettings,
+  LivePreviewOptimizationLevel,
   RenderedPreviewQuality,
   RenderedPreviewState,
   SettingsPreset,
@@ -56,6 +68,7 @@ interface StudioStore {
   breakup: BreakupSettings;
   animation: AnimationSettings;
   renderedPreview: RenderedPreviewState;
+  livePreviewOptimizationLevel: LivePreviewOptimizationLevel;
   color: ColorSettings;
   exportOptions: ExportOptions;
   exportScale: number;
@@ -74,6 +87,8 @@ interface StudioStore {
   updateBreakup: (patch: Partial<BreakupSettings>) => void;
   updateAnimation: (patch: Partial<AnimationSettings>) => void;
   setAnimationPreviewMode: (mode: AnimationPreviewMode) => void;
+  setLivePreviewOptimizationLevel: (level: LivePreviewOptimizationLevel) => void;
+  setAnimationPreviewFormat: (format: AnimationPreviewFormat) => void;
   setRenderedPreviewQuality: (quality: RenderedPreviewQuality) => void;
   updateRenderedPreviewState: (patch: Partial<RenderedPreviewState>) => void;
   startRenderedPreviewRender: (render: RenderedPreviewRenderStart) => void;
@@ -253,6 +268,18 @@ const asString = (value: unknown, fallback: string) => (typeof value === "string
 const asOptionalString = (value: unknown) => (typeof value === "string" && value.trim() ? value : null);
 const asHexColor = (value: unknown, fallback: string) =>
   typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value.trim()) ? value : fallback;
+const normalizeLivePreviewOptimizationLevel = (level: unknown): LivePreviewOptimizationLevel =>
+  level === "super-fast"
+    ? "super-fast"
+    : level === "fast" || level === "speed"
+      ? "fast"
+      : level === "balanced"
+        ? "balanced"
+        : level === "high" || level === "sharp"
+          ? "high"
+          : level === "off"
+            ? "off"
+            : "balanced";
 
 const imageGlyphDataUrlPattern = /^data:image\/(?:png|svg\+xml|jpeg|webp);/i;
 
@@ -288,8 +315,16 @@ const normalizeImageGlyphs = (glyphs?: unknown): ImageGlyphRecord[] =>
         })
     : [];
 
-const normalizeFont = (font?: Partial<FontSettings>): FontSettings => ({
-  family: asString(font?.family, defaultFontSettings.family),
+const isKnownFontFamily = (family: string, uploadedFonts: UploadedFontRecord[] = []) =>
+  builtInFonts.includes(family as (typeof builtInFonts)[number]) || uploadedFonts.some((font) => font.family === family);
+
+const normalizeFontFamily = (family: unknown, uploadedFonts?: UploadedFontRecord[]) => {
+  const normalized = asString(family, defaultFontSettings.family);
+  return isKnownFontFamily(normalized, uploadedFonts) ? normalized : defaultFontSettings.family;
+};
+
+const normalizeFont = (font?: Partial<FontSettings>, uploadedFonts?: UploadedFontRecord[]): FontSettings => ({
+  family: normalizeFontFamily(font?.family, uploadedFonts),
   size: clamp(asNumber(font?.size, defaultFontSettings.size), 7, 32),
   weight: clamp(asNumber(font?.weight, defaultFontSettings.weight), 100, 900),
   lineHeight: clamp(asNumber(font?.lineHeight, defaultFontSettings.lineHeight), 0.72, 1.75),
@@ -298,34 +333,49 @@ const normalizeFont = (font?: Partial<FontSettings>): FontSettings => ({
   antiAlias: asBoolean(font?.antiAlias, defaultFontSettings.antiAlias)
 });
 
-const normalizeAscii = (ascii?: Partial<AsciiSettings>): AsciiSettings => ({
-  glyphMode: ascii?.glyphMode === "images" ? "images" : "characters",
-  characterDensity: clamp(asNumber(ascii?.characterDensity, defaultAsciiSettings.characterDensity), 0.05, 1.55),
-  renderResolution: clamp(asNumber(ascii?.renderResolution, defaultAsciiSettings.renderResolution), 1, 300),
-  characterScale: clamp(
-    Math.abs(asNumber(ascii?.characterScale, defaultAsciiSettings.characterScale) - 0.94) < 0.0001
-      ? defaultAsciiSettings.characterScale
-      : asNumber(ascii?.characterScale, defaultAsciiSettings.characterScale),
-    0.55,
-    1.35
-  ),
-  spacingX: clamp(asNumber(ascii?.spacingX, defaultAsciiSettings.spacingX), 0.72, 1.8),
-  spacingY: clamp(asNumber(ascii?.spacingY, defaultAsciiSettings.spacingY), 0.72, 1.8),
-  edgeEmphasis: clamp(asNumber(ascii?.edgeEmphasis, defaultAsciiSettings.edgeEmphasis), 0, 1.6),
-  luminanceCurve: clamp(asNumber(ascii?.luminanceCurve, defaultAsciiSettings.luminanceCurve), 0.35, 2.2),
-  glyphOpacity: clamp(asNumber(ascii?.glyphOpacity, defaultAsciiSettings.glyphOpacity), 0, 1),
-  backgroundOpacity: clamp(asNumber(ascii?.backgroundOpacity, defaultAsciiSettings.backgroundOpacity), 0, 1),
-  cellSpacing: clamp(asNumber(ascii?.cellSpacing, defaultAsciiSettings.cellSpacing), 0, 100),
-  randomness: clamp(asNumber(ascii?.randomness, defaultAsciiSettings.randomness), 0, 100),
-  randomSeed: Math.trunc(asNumber(ascii?.randomSeed, defaultAsciiSettings.randomSeed)),
-  charset: asString(ascii?.charset, defaultAsciiSettings.charset),
-  selectedPresetId: asString(ascii?.selectedPresetId, defaultAsciiSettings.selectedPresetId),
-  imageGlyphs: normalizeImageGlyphs(ascii?.imageGlyphs),
-  imageGlyphSourceName:
+const hasRemovedBuiltInImageGlyphAsset = (glyphs?: unknown) =>
+  Array.isArray(glyphs) &&
+  glyphs.some((glyph) => isRecord(glyph) && isRemovedBuiltInImageGlyphAssetSource(glyph.dataUrl));
+
+const normalizeAscii = (ascii?: Partial<AsciiSettings>): AsciiSettings => {
+  const imageGlyphs = normalizeImageGlyphs(ascii?.imageGlyphs);
+  const sourceName =
     typeof ascii?.imageGlyphSourceName === "string" && ascii.imageGlyphSourceName.trim()
       ? ascii.imageGlyphSourceName
-      : null
-});
+      : null;
+  const useSelectedGlyphFallback =
+    imageGlyphs.length === 0 &&
+    (isRemovedBuiltInImageGlyphSourceName(sourceName) || hasRemovedBuiltInImageGlyphAsset(ascii?.imageGlyphs));
+  const normalizedImageGlyphs = useSelectedGlyphFallback
+    ? createBuiltinSelectedSvgGlyphRecords("migrated")
+    : imageGlyphs;
+
+  return {
+    glyphMode: ascii?.glyphMode === "images" ? "images" : "characters",
+    characterDensity: clamp(asNumber(ascii?.characterDensity, defaultAsciiSettings.characterDensity), 0.05, 1.55),
+    renderResolution: clamp(asNumber(ascii?.renderResolution, defaultAsciiSettings.renderResolution), 1, 300),
+    characterScale: clamp(
+      Math.abs(asNumber(ascii?.characterScale, defaultAsciiSettings.characterScale) - 0.94) < 0.0001
+        ? defaultAsciiSettings.characterScale
+        : asNumber(ascii?.characterScale, defaultAsciiSettings.characterScale),
+      0.55,
+      1.35
+    ),
+    spacingX: clamp(asNumber(ascii?.spacingX, defaultAsciiSettings.spacingX), 0.72, 1.8),
+    spacingY: clamp(asNumber(ascii?.spacingY, defaultAsciiSettings.spacingY), 0.72, 1.8),
+    edgeEmphasis: clamp(asNumber(ascii?.edgeEmphasis, defaultAsciiSettings.edgeEmphasis), 0, 1.6),
+    luminanceCurve: clamp(asNumber(ascii?.luminanceCurve, defaultAsciiSettings.luminanceCurve), 0.35, 2.2),
+    glyphOpacity: clamp(asNumber(ascii?.glyphOpacity, defaultAsciiSettings.glyphOpacity), 0, 1),
+    backgroundOpacity: clamp(asNumber(ascii?.backgroundOpacity, defaultAsciiSettings.backgroundOpacity), 0, 1),
+    cellSpacing: clamp(asNumber(ascii?.cellSpacing, defaultAsciiSettings.cellSpacing), 0, 100),
+    randomness: clamp(asNumber(ascii?.randomness, defaultAsciiSettings.randomness), 0, 100),
+    randomSeed: Math.trunc(asNumber(ascii?.randomSeed, defaultAsciiSettings.randomSeed)),
+    charset: asString(ascii?.charset, defaultAsciiSettings.charset),
+    selectedPresetId: asString(ascii?.selectedPresetId, defaultAsciiSettings.selectedPresetId),
+    imageGlyphs: normalizedImageGlyphs,
+    imageGlyphSourceName: useSelectedGlyphFallback ? builtinSelectedSvgGlyphPresetName : sourceName
+  };
+};
 
 const normalizeImage = (image?: Partial<ImageSettings>, legacyToneInvert = defaultImageSettings.invertTone): ImageSettings => ({
   brightness: clamp(asNumber(image?.brightness, defaultImageSettings.brightness), -0.5, 0.5),
@@ -578,7 +628,7 @@ const createSettingsSnapshot = (state: StudioStore): StudioSettingsSnapshot => {
   const color = normalizeColor(state.color);
   const ascii = enforceDuotoneBackgroundOpacity(normalizeAscii(state.ascii), color);
   return {
-    font: normalizeFont(state.font),
+    font: normalizeFont(state.font, state.uploadedFonts),
     ascii,
     image: normalizeImage(state.image),
     frame: normalizeFrame(state.frame),
@@ -707,6 +757,7 @@ export const useStudioStore = create<StudioStore>()(
       breakup: defaultBreakupSettings,
       animation: defaultAnimationSettings,
       renderedPreview: createRenderedPreviewState(defaultAnimationSettings.fps),
+      livePreviewOptimizationLevel: "balanced",
       color: defaultColorSettings,
       exportOptions: defaultExportOptions,
       exportScale: defaultExportScale,
@@ -744,6 +795,27 @@ export const useStudioStore = create<StudioStore>()(
             state.animation.fps
           )
         })),
+      setLivePreviewOptimizationLevel: (level) =>
+        set(() => ({
+          livePreviewOptimizationLevel: normalizeLivePreviewOptimizationLevel(level)
+        })),
+      setAnimationPreviewFormat: (format) =>
+        set((state) => {
+          const previewFormat = normalizeAnimationPreviewFormat(format);
+          const nextPreview = normalizeRenderedPreviewState(
+            {
+              ...state.renderedPreview,
+              previewFormat
+            },
+            state.animation.fps
+          );
+          return {
+            renderedPreview:
+              previewFormat === state.renderedPreview.previewFormat
+                ? nextPreview
+                : markRenderedPreviewStateStale(nextPreview)
+          };
+        }),
       setRenderedPreviewQuality: (quality) =>
         set((state) => ({
           renderedPreview: markRenderedPreviewStateStale(
@@ -779,6 +851,7 @@ export const useStudioStore = create<StudioStore>()(
               progress: 0,
               cacheKey: render.cacheKey,
               quality: render.quality,
+              previewFormat: render.previewFormat,
               cancelRequestId: render.cancelRequestId,
               error: null
             },
@@ -824,6 +897,7 @@ export const useStudioStore = create<StudioStore>()(
                 currentFrame: 0,
                 progress: 1,
                 quality: render.quality,
+                previewFormat: render.previewFormat,
                 cancelRequestId: null,
                 error: null
               },
@@ -1125,7 +1199,11 @@ export const useStudioStore = create<StudioStore>()(
           frame: defaultFrameSettings,
           breakup: defaultBreakupSettings,
           animation: defaultAnimationSettings,
-          renderedPreview: createRenderedPreviewState(defaultAnimationSettings.fps),
+          renderedPreview: createRenderedPreviewState(
+            defaultAnimationSettings.fps,
+            state.renderedPreview.quality,
+            state.renderedPreview.previewFormat
+          ),
           color: defaultColorSettings,
           exportOptions: defaultExportOptions,
           exportScale: defaultExportScale,
@@ -1159,7 +1237,12 @@ export const useStudioStore = create<StudioStore>()(
         frame: state.frame,
         breakup: state.breakup,
         animation: state.animation,
-        renderedPreview: createRenderedPreviewState(state.animation.fps, state.renderedPreview.quality),
+        renderedPreview: createRenderedPreviewState(
+          state.animation.fps,
+          state.renderedPreview.quality,
+          state.renderedPreview.previewFormat
+        ),
+        livePreviewOptimizationLevel: state.livePreviewOptimizationLevel,
         color: state.color,
         exportOptions: state.exportOptions,
         exportScale: state.exportScale,
@@ -1171,6 +1254,7 @@ export const useStudioStore = create<StudioStore>()(
       }),
       merge: (persisted, current) => {
         const value = isRecord(persisted) ? (persisted as Partial<StudioStore>) : undefined;
+        const uploadedFonts = normalizeUploadedFonts(value?.uploadedFonts);
         const color = normalizeColor(value?.color);
         const rawImage = isRecord(value?.image) ? (value.image as Partial<ImageSettings>) : undefined;
         const hasExplicitToneInvert = Boolean(rawImage && "invertTone" in rawImage);
@@ -1188,13 +1272,14 @@ export const useStudioStore = create<StudioStore>()(
           ...value,
           imageName: "Untitled",
           imageDataUrl: null,
-          font: normalizeFont(value?.font),
+          font: normalizeFont(value?.font, uploadedFonts),
           ascii,
           image: normalizeImage(rawImage, legacyToneInvert),
           frame: normalizeFrame(value?.frame),
           breakup: normalizeBreakup(value?.breakup),
           animation: normalizeAnimation(value?.animation),
           renderedPreview: normalizeRenderedPreviewState(value?.renderedPreview, defaultAnimationSettings.fps),
+          livePreviewOptimizationLevel: normalizeLivePreviewOptimizationLevel(value?.livePreviewOptimizationLevel),
           color,
           lastNonDuotoneBackgroundOpacity,
           exportOptions: normalizeExportOptions(value?.exportOptions),
@@ -1202,7 +1287,7 @@ export const useStudioStore = create<StudioStore>()(
           presets: mergePresets(value?.presets),
           settingsPresets: normalizeSettingsPresets(value?.settingsPresets),
           activeSettingsPresetId: asOptionalString(value?.activeSettingsPresetId),
-          uploadedFonts: normalizeUploadedFonts(value?.uploadedFonts),
+          uploadedFonts,
           undoStack: [],
           redoStack: []
         };

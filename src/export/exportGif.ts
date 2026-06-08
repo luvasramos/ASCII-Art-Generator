@@ -10,10 +10,15 @@ import type {
   GlyphMetric,
   ImageSettings
 } from "../renderer/types";
+import type {
+  RenderedPreviewCache,
+  RenderedPreviewFrameSource
+} from "../renderer/renderedPreviewModel";
 import { downloadBlob } from "./download";
 import { isEchoActive, resolveEchoLayerAlpha } from "../renderer/echoComposite";
 import { resolveAnimationFrameCount } from "../renderer/animationTiming";
 import { resolveAnimatedExportFps, resolveAnimatedExportProfile } from "./exportQuality";
+import { cachedAnimationFrameMatches, renderCachedAnimationFrames } from "./cachedAnimationFrames";
 import { renderAsciiAnimationFrames } from "./renderAnimationFrames";
 
 interface ExportAsciiGifArgs {
@@ -34,6 +39,7 @@ interface ExportAsciiGifArgs {
   signal?: AbortSignal;
   onProgress?: (progress: number) => void;
   onStatus?: (message: string) => void;
+  cachedFrames?: RenderedPreviewCache<RenderedPreviewFrameSource> | null;
   getFrame: (timeSeconds: number, progress: number, frameIndex: number, totalFrames: number) => ImageData | Promise<ImageData>;
 }
 
@@ -775,6 +781,7 @@ export const exportAsciiGif = async ({
   signal,
   onProgress,
   onStatus,
+  cachedFrames,
   getFrame
 }: ExportAsciiGifArgs): Promise<GifExportResult> => {
   const exportQuality = quality ?? exportOptions.animatedExportQuality;
@@ -783,6 +790,7 @@ export const exportAsciiGif = async ({
   const palette = buildPalette(color, exportOptions, exportQuality, animation);
   const transparentIndex = exportOptions.transparentBackground ? 0 : null;
   const alphaThreshold = (exportOptions.alphaThreshold / 100) * 255;
+  const useCachedFrames = cachedAnimationFrameMatches(cachedFrames, normalizedFps, totalFrames);
 
   const encode = async (mode: "optimized" | "safe") => {
     const quantizer = new PaletteQuantizer(palette, transparentIndex);
@@ -790,27 +798,36 @@ export const exportAsciiGif = async ({
     const safeMode = mode === "safe";
 
     onStatus?.(
-      safeMode
+      useCachedFrames
+        ? `Encoding GIF from final preview: ${totalFrames} frames, ${palette.length} colors, ${normalizedFps}fps`
+        : safeMode
         ? `Rendering safe GIF fallback: ${totalFrames} full frames, ${palette.length} colors, ${normalizedFps}fps`
         : `Rendering optimized GIF: ${totalFrames} frames, ${palette.length} active colors, ${normalizedFps}fps`
     );
 
-    for await (const renderedFrame of renderAsciiAnimationFrames({
-      duration,
-      fps: normalizedFps,
-      font,
-      ascii,
-      image,
-      frame,
-      breakup,
-      color,
-      exportOptions,
-      exportScale,
-      glyphMetrics,
-      animation,
-      signal,
-      getFrame
-    })) {
+    const renderedFrames = useCachedFrames && cachedFrames
+      ? renderCachedAnimationFrames({
+          cache: cachedFrames,
+          signal
+        })
+      : renderAsciiAnimationFrames({
+          duration,
+          fps: normalizedFps,
+          font,
+          ascii,
+          image,
+          frame,
+          breakup,
+          color,
+          exportOptions,
+          exportScale,
+          glyphMetrics,
+          animation,
+          signal,
+          getFrame
+        });
+
+    for await (const renderedFrame of renderedFrames) {
       throwIfAborted(signal);
       if (!encoder) {
         encoder = new GifEncoder(

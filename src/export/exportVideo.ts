@@ -11,7 +11,12 @@ import type {
   GlyphMetric,
   ImageSettings
 } from "../renderer/types";
+import type {
+  RenderedPreviewCache,
+  RenderedPreviewFrameSource
+} from "../renderer/renderedPreviewModel";
 import { resolveAnimationFrameCount } from "../renderer/animationTiming";
+import { cachedAnimationFrameMatches, renderCachedAnimationFrames } from "./cachedAnimationFrames";
 import { downloadBlob } from "./download";
 import { formatBitrate, resolveAnimatedExportFps, resolveVideoEncodingSettings } from "./exportQuality";
 import { collectMp4RuntimeDiagnostics, encodePngSequenceToMp4 } from "./ffmpegMp4";
@@ -44,6 +49,7 @@ interface SharedAsciiVideoArgs {
   signal?: AbortSignal;
   onProgress?: (progress: number) => void;
   onStatus?: (message: string) => void;
+  cachedFrames?: RenderedPreviewCache<RenderedPreviewFrameSource> | null;
 }
 
 interface ExportAsciiVideoArgs extends SharedAsciiVideoArgs {
@@ -321,6 +327,7 @@ export const exportAsciiFrameSequence = async ({
   signal,
   onProgress,
   onStatus,
+  cachedFrames,
   getFrame
 }: ExportAsciiFrameSequenceArgs): Promise<ExportAsciiVideoResult> => {
   if (typeof document === "undefined") {
@@ -331,6 +338,7 @@ export const exportAsciiFrameSequence = async ({
   const convertingToMp4 = preferredExtension === "mp4";
   const normalizedFps = resolveAnimatedExportFps(fps, exportQuality, animation?.type);
   const totalFrames = resolveAnimationFrameCount(duration, normalizedFps);
+  const useCachedFrames = cachedAnimationFrameMatches(cachedFrames, normalizedFps, totalFrames);
 
   if (convertingToMp4) {
     logMp4Export("Runtime diagnostics before MP4 export", {
@@ -340,24 +348,31 @@ export const exportAsciiFrameSequence = async ({
 
     onStatus?.("Preparing export");
     onProgress?.(0);
-    const renderedFrames = renderAsciiAnimationFrames({
-      duration,
-      fps: normalizedFps,
-      font,
-      ascii,
-      image,
-      frame,
-      breakup,
-      color,
-      exportOptions,
-      exportScale,
-      glyphMetrics,
-      animation,
-      renderLikePreview: true,
-      signal,
-      onFrameStart: (frameIndex, frameTotal) => onStatus?.(`Rendering frame ${frameIndex + 1} of ${frameTotal}`),
-      getFrame
-    });
+    const renderedFrames = useCachedFrames && cachedFrames
+      ? renderCachedAnimationFrames({
+          cache: cachedFrames,
+          signal,
+          onFrameStart: (frameIndex, frameTotal) =>
+            onStatus?.(`Using final preview frame ${frameIndex + 1} of ${frameTotal}`)
+        })
+      : renderAsciiAnimationFrames({
+          duration,
+          fps: normalizedFps,
+          font,
+          ascii,
+          image,
+          frame,
+          breakup,
+          color,
+          exportOptions,
+          exportScale,
+          glyphMetrics,
+          animation,
+          renderLikePreview: true,
+          signal,
+          onFrameStart: (frameIndex, frameTotal) => onStatus?.(`Rendering frame ${frameIndex + 1} of ${frameTotal}`),
+          getFrame
+        });
     const firstFrameResult = await renderedFrames.next();
     if (firstFrameResult.done) {
       throw new Error("Animation frame generation failed.");
@@ -381,6 +396,7 @@ export const exportAsciiFrameSequence = async ({
       expectedDuration: totalFrames / normalizedFps,
       expectedFrameCount: totalFrames,
       exportScale,
+      cachedFinalPreviewFrames: useCachedFrames,
       quality: encodingSettings.profile.label,
       bitrateTarget: encodingSettings.bitrate,
       bitrateTargetLabel: formatBitrate(encodingSettings.bitrate),
@@ -427,6 +443,7 @@ export const exportAsciiFrameSequence = async ({
       outputWidth,
       outputHeight,
       exportScale,
+      cachedFinalPreviewFrames: useCachedFrames,
       mp4BlobSize: mp4Blob.size,
       mp4MimeType: mp4Blob.type,
       bitrateTarget: encodingSettings.bitrate,
@@ -465,26 +482,33 @@ export const exportAsciiFrameSequence = async ({
   try {
     onStatus?.("Preparing export");
     if (prerenderFrames) {
-      onStatus?.("Rendering frames");
+      onStatus?.(useCachedFrames ? "Using final preview frames" : "Rendering frames");
     }
 
-    for await (const renderedFrame of renderAsciiAnimationFrames({
-      duration,
-      fps: normalizedFps,
-      font,
-      ascii,
-      image,
-      frame,
-      breakup,
-      color,
-      exportOptions,
-      exportScale,
-      glyphMetrics,
-      animation,
-      renderLikePreview: true,
-      signal,
-      getFrame
-    })) {
+    const initialFrames = useCachedFrames && cachedFrames
+      ? renderCachedAnimationFrames({
+          cache: cachedFrames,
+          signal
+        })
+      : renderAsciiAnimationFrames({
+          duration,
+          fps: normalizedFps,
+          font,
+          ascii,
+          image,
+          frame,
+          breakup,
+          color,
+          exportOptions,
+          exportScale,
+          glyphMetrics,
+          animation,
+          renderLikePreview: true,
+          signal,
+          getFrame
+        });
+
+    for await (const renderedFrame of initialFrames) {
       firstCanvas = renderedFrame.canvas;
       if (!prerenderFrames) {
         break;
@@ -598,23 +622,29 @@ export const exportAsciiFrameSequence = async ({
         }
       } else {
         let frameIndex = 0;
-        for await (const renderedFrame of renderAsciiAnimationFrames({
-          duration,
-          fps: normalizedFps,
-          font,
-          ascii,
-          image,
-          frame,
-          breakup,
-          color,
-          exportOptions,
-          exportScale,
-          glyphMetrics,
-          animation,
-          renderLikePreview: true,
-          signal,
-          getFrame
-        })) {
+        const liveFrames = useCachedFrames && cachedFrames
+          ? renderCachedAnimationFrames({
+              cache: cachedFrames,
+              signal
+            })
+          : renderAsciiAnimationFrames({
+              duration,
+              fps: normalizedFps,
+              font,
+              ascii,
+              image,
+              frame,
+              breakup,
+              color,
+              exportOptions,
+              exportScale,
+              glyphMetrics,
+              animation,
+              renderLikePreview: true,
+              signal,
+              getFrame
+            });
+        for await (const renderedFrame of liveFrames) {
           throwIfAborted(signal);
           onStatus?.(`Rendering ${frameLabel} frame ${renderedFrame.frameIndex + 1} of ${renderedFrame.totalFrames}`);
           drawRecordingFrame(recordingCtx, recordingCanvas, renderedFrame.canvas);

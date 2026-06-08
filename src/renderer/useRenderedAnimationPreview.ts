@@ -24,6 +24,7 @@ import type {
   FrameSettings,
   GlyphMetric,
   ImageSettings,
+  AnimationPreviewFormat,
   RenderedPreviewQuality
 } from "./types";
 
@@ -41,6 +42,7 @@ interface RenderedAnimationPreviewArgs {
   glyphMetrics: GlyphMetric[];
   animation: AnimationSettings;
   quality: RenderedPreviewQuality;
+  previewFormat: AnimationPreviewFormat;
 }
 
 interface GenerateRenderedAnimationPreviewArgs extends RenderedAnimationPreviewArgs {
@@ -120,6 +122,7 @@ export const resolveRenderedPreviewScale = (exportScale: number, quality: Render
 export const createRenderedAnimationPreviewCacheKey = ({
   sourceKey,
   quality,
+  previewFormat,
   animation,
   font,
   ascii,
@@ -134,6 +137,7 @@ export const createRenderedAnimationPreviewCacheKey = ({
   createRenderedPreviewCacheKey({
     sourceKey,
     quality,
+    previewFormat,
     animation,
     font,
     ascii,
@@ -246,6 +250,7 @@ export const generateRenderedAnimationPreview = async ({
   glyphMetrics,
   animation,
   quality,
+  previewFormat,
   cancelHandle,
   onProgress
 }: GenerateRenderedAnimationPreviewArgs): Promise<RenderedPreviewCache<RenderedPreviewFrameSource>> => {
@@ -273,12 +278,14 @@ export const generateRenderedAnimationPreview = async ({
     exportScale,
     glyphMetrics,
     animation: renderAnimation,
-    quality
+    quality,
+    previewFormat
   });
   const previewScale = resolveRenderedPreviewScale(exportScale, quality);
   const frames: RenderedPreviewCachedFrame<RenderedPreviewFrameSource>[] = [];
   let width = 0;
   let height = 0;
+  let memoryEstimateBytes = 0;
   let cacheShapeChecked = false;
 
   try {
@@ -304,7 +311,7 @@ export const generateRenderedAnimationPreview = async ({
         throwIfCancelled(cancelHandle);
         width = canvasWidth;
         height = canvasHeight;
-        assertRenderedPreviewCacheSize(width, height, totalFrames);
+        memoryEstimateBytes = assertRenderedPreviewCacheSize(width, height, totalFrames);
         cacheShapeChecked = true;
       },
       getFrame: (timeSeconds, progress, frameIndex, totalFrames) =>
@@ -314,7 +321,7 @@ export const generateRenderedAnimationPreview = async ({
       width = renderedFrame.canvas.width;
       height = renderedFrame.canvas.height;
       if (!cacheShapeChecked) {
-        assertRenderedPreviewCacheSize(width, height, frameCount);
+        memoryEstimateBytes = assertRenderedPreviewCacheSize(width, height, frameCount);
         cacheShapeChecked = true;
       }
 
@@ -350,10 +357,13 @@ export const generateRenderedAnimationPreview = async ({
     const cache: RenderedPreviewCache<RenderedPreviewFrameSource> = {
       key: cacheKey,
       quality,
+      previewFormat,
       fps,
       frameCount,
       width,
       height,
+      exportScale: previewScale,
+      memoryEstimateBytes: memoryEstimateBytes || estimateRenderedPreviewCacheBytes(width, height, frameCount),
       frames,
       generatedAt: Date.now()
     };
@@ -363,10 +373,13 @@ export const generateRenderedAnimationPreview = async ({
     freeRenderedPreviewCache({
       key: cacheKey,
       quality,
+      previewFormat,
       fps,
       frameCount,
       width,
       height,
+      exportScale: previewScale,
+      memoryEstimateBytes: memoryEstimateBytes || estimateRenderedPreviewCacheBytes(width, height, frameCount),
       frames,
       generatedAt: Date.now()
     });
@@ -407,6 +420,7 @@ export const useRenderedAnimationPreview = (args: RenderedAnimationPreviewArgs) 
       fps,
       frameCount,
       quality: args.quality,
+      previewFormat: args.previewFormat,
       cancelRequestId: cancelHandle.id
     });
 
@@ -442,7 +456,8 @@ export const useRenderedAnimationPreview = (args: RenderedAnimationPreviewArgs) 
         cacheKey: cache.key,
         fps: cache.fps,
         frameCount: cache.frameCount,
-        quality: cache.quality
+        quality: cache.quality,
+        previewFormat: cache.previewFormat
       });
       return cache;
     } catch (error) {
