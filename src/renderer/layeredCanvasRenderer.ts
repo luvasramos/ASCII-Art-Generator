@@ -20,6 +20,12 @@ import {
 import { resolveRenderAnimationState } from "./animationEffects";
 import type { ImageGlyphAtlasEntry } from "../atlas/imageGlyphAtlas";
 import { createImageGlyphBrightnessMapper } from "./imageGlyphDistribution";
+import {
+  resolveDuotoneHitsOfColor,
+  resolveDuotoneTransitionColor,
+  shouldUseStaticDuotoneHitColor
+} from "./duotoneTransitionAccent";
+import { matrixTransitionColorCanRender } from "./strictDuotone";
 
 interface LayerRenderArgs {
   backgroundCanvas: HTMLCanvasElement;
@@ -32,6 +38,7 @@ interface LayerRenderArgs {
   color: ColorSettings;
   exportOptions?: ExportOptions;
   animation?: AnimationSettings;
+  transitionAccent?: AnimationSettings;
   animationTimeSeconds?: number;
   glyphMetrics?: GlyphMetric[];
 }
@@ -52,6 +59,22 @@ const quantizeBrightness = (value: number) => Math.round(Math.min(1, Math.max(0,
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
 
 const clampByte = (value: number) => Math.min(255, Math.max(0, Math.round(value)));
+
+const hash01 = (x: number, y: number, salt: number) => {
+  const value = Math.sin((x + 1) * 127.1 + (y + 1) * 311.7 + salt * 74.7) * 43758.5453123;
+  return value - Math.floor(value);
+};
+
+const duotoneLayerVisible = (alpha: number, cell: CellRenderData, salt: number) => {
+  const value = clamp01(alpha);
+  if (value >= 0.999) {
+    return true;
+  }
+  if (value <= 0.001) {
+    return false;
+  }
+  return hash01(cell.x, cell.y, salt) < value;
+};
 
 const tintedImageGlyphCache = new Map<string, HTMLCanvasElement>();
 const binaryTintedGlyphCache = new Map<string, HTMLCanvasElement>();
@@ -117,7 +140,11 @@ const getTintedImageGlyphCanvas = (imageGlyph: ImageGlyphAtlasEntry, color: stri
   return canvas;
 };
 
-const getBinaryTintedGlyphCanvas = (source: HTMLCanvasElement, color: string, id: string) => {
+const getBinaryTintedGlyphCanvas = (
+  source: HTMLCanvasElement | OffscreenCanvas,
+  color: string,
+  id: string
+) => {
   const cacheKey = `${id}:${source.width}x${source.height}:${color.replace(/\s+/g, "")}`;
   const cached = binaryTintedGlyphCache.get(cacheKey);
   if (cached) {
@@ -195,19 +222,31 @@ const applyMatrixTransitionColor = (
   baseColor: string,
   cell: CellRenderData,
   animation: AnimationSettings | undefined,
+  transitionAccent: AnimationSettings | undefined,
   color: ColorSettings,
+  ascii: AsciiSettings,
   brightnessMultiplier: number,
-  duotoneMode: boolean
+  duotoneMode: boolean,
+  animationTimeSeconds: number | undefined
 ) => {
   const strength = clamp01(cell.matrixTransition ?? 0);
-  if (!animation?.matrixTransitionColorEnabled || animation.matrixTransitionAmount <= 0 || strength <= 0) {
+  const accentSettings = transitionAccent ?? animation;
+  const transitionEnabled = matrixTransitionColorCanRender(accentSettings);
+  if (duotoneMode) {
+    if (transitionEnabled && strength > 0 && accentSettings) {
+      return resolveDuotoneTransitionColor(accentSettings, color);
+    }
+    if (shouldUseStaticDuotoneHitColor(cell, color, ascii, animation, animationTimeSeconds)) {
+      return resolveDuotoneHitsOfColor(color);
+    }
     return baseColor;
   }
-  const transitionColor = color.invert ? invertCssColor(animation.matrixTransitionColor) : animation.matrixTransitionColor;
-  const displayTransition = duotoneMode
-    ? transitionColor
-    : scaleColorBrightness(transitionColor, brightnessMultiplier);
-  return blendCssColors(baseColor, displayTransition, duotoneMode ? Math.min(0.72, strength * 1.35) : Math.min(0.48, strength));
+  if (!transitionEnabled || strength <= 0 || !accentSettings) {
+    return baseColor;
+  }
+  const transitionColor = resolveDuotoneTransitionColor(accentSettings, color);
+  const displayTransition = scaleColorBrightness(transitionColor, brightnessMultiplier);
+  return blendCssColors(baseColor, displayTransition, Math.min(0.48, strength));
 };
 
 const drawImageCover = (
@@ -252,6 +291,7 @@ export const renderAsciiLayers = ({
   color,
   exportOptions,
   animation,
+  transitionAccent,
   animationTimeSeconds,
   glyphMetrics
 }: LayerRenderArgs) => {
@@ -305,12 +345,15 @@ export const renderAsciiLayers = ({
     if (cell.backgroundAlpha <= 0) {
       continue;
     }
+    if (duotoneMode && !duotoneLayerVisible(cell.backgroundAlpha, cell, 19)) {
+      continue;
+    }
     const resolvedBackground = sourceMatchCellBackground
       ? resolveDisplaySourceMatchColor(cell, color)
       : resolveDisplayCellColor(quantizeBrightness(cell.background), color, "background");
     const bg = duotoneMode ? resolvedBackground : scaleColorBrightness(resolvedBackground, animationState.brightnessMultiplier);
     backgroundCtx.fillStyle = bg;
-    backgroundCtx.globalAlpha = cell.backgroundAlpha;
+    backgroundCtx.globalAlpha = duotoneMode ? 1 : cell.backgroundAlpha;
     backgroundCtx.fillRect(
       grid.gapX > 0 ? cell.x * stepX : Math.round(cell.x * stepX),
       grid.gapY > 0 ? cell.y * stepY : Math.round(cell.y * stepY),
@@ -340,6 +383,10 @@ export const renderAsciiLayers = ({
     if (cell.foregroundAlpha <= 0) {
       continue;
     }
+    const effectiveForegroundAlpha = clamp01(cell.foregroundAlpha * animationState.glyphAlphaMultiplier);
+    if (duotoneMode && !duotoneLayerVisible(effectiveForegroundAlpha, cell, 37)) {
+      continue;
+    }
     if (useImageGlyphs && imageGlyphAtlas) {
       const glyphBrightness = imageGlyphMapper
         ? imageGlyphMapper.map(cell)
@@ -360,18 +407,21 @@ export const renderAsciiLayers = ({
         baseGlyphColor,
         cell,
         animation,
+        transitionAccent,
         color,
+        ascii,
         animationState.brightnessMultiplier,
-        duotoneMode
+        duotoneMode,
+        animationTimeSeconds
       );
       const tintedGlyph = getTintedImageGlyphCanvas(imageGlyph, glyphColor, duotoneMode);
-      const drawWidth = grid.cellWidth * ascii.characterScale * animationState.glyphScaleMultiplier;
-      const drawHeight = grid.cellHeight * ascii.characterScale * animationState.glyphScaleMultiplier;
-      const drawX = cell.x * stepX + (grid.cellWidth - drawWidth) / 2;
-      const drawY = cell.y * stepY + (grid.cellHeight - drawHeight) / 2;
+      const drawSize =
+        Math.min(grid.cellWidth, grid.cellHeight) * ascii.characterScale * animationState.glyphScaleMultiplier;
+      const drawX = cell.x * stepX + grid.cellWidth / 2 - drawSize / 2;
+      const drawY = cell.y * stepY + grid.cellHeight / 2 - drawSize / 2;
       glyphCtx.save();
-      glyphCtx.globalAlpha = clamp01(cell.foregroundAlpha * animationState.glyphAlphaMultiplier);
-      drawImageCover(glyphCtx, tintedGlyph, drawX, drawY, drawWidth, drawHeight, duotoneMode);
+      glyphCtx.globalAlpha = duotoneMode ? 1 : effectiveForegroundAlpha;
+      drawImageCover(glyphCtx, tintedGlyph, drawX, drawY, drawSize, drawSize, duotoneMode);
       glyphCtx.restore();
       continue;
     }
@@ -385,11 +435,14 @@ export const renderAsciiLayers = ({
       baseForeground,
       cell,
       animation,
+      transitionAccent,
       color,
+      ascii,
       animationState.brightnessMultiplier,
-      duotoneMode
+      duotoneMode,
+      animationTimeSeconds
     );
-    const glyph = atlas.getTintedGlyph(cell.glyph, fg);
+    const glyph = duotoneMode ? atlas.glyphs.get(cell.glyph)?.alphaCanvas ?? null : atlas.getTintedGlyph(cell.glyph, fg);
     if (!glyph) {
       continue;
     }
@@ -398,7 +451,7 @@ export const renderAsciiLayers = ({
     const drawHeight = grid.cellHeight * animationState.glyphScaleMultiplier;
     const drawX = cell.x * stepX + (grid.cellWidth - drawWidth) / 2;
     const drawY = cell.y * stepY + (grid.cellHeight - drawHeight) / 2;
-    glyphCtx.globalAlpha = clamp01(cell.foregroundAlpha * animationState.glyphAlphaMultiplier);
+    glyphCtx.globalAlpha = duotoneMode ? 1 : effectiveForegroundAlpha;
     glyphCtx.drawImage(
       drawGlyph,
       duotoneMode ? Math.round(drawX) : drawX,
@@ -424,7 +477,10 @@ export const renderAsciiToCanvas = ({
   ascii,
   color,
   scale,
-  exportOptions
+  exportOptions,
+  animation,
+  transitionAccent,
+  animationTimeSeconds
 }: SingleCanvasRenderArgs) => {
   const backgroundCanvas = document.createElement("canvas");
   const glyphCanvas = document.createElement("canvas");
@@ -437,7 +493,10 @@ export const renderAsciiToCanvas = ({
     font,
     ascii,
     color,
-    exportOptions
+    exportOptions,
+    animation,
+    transitionAccent,
+    animationTimeSeconds
   });
 
   const output = document.createElement("canvas");

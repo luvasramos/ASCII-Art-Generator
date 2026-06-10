@@ -3,6 +3,7 @@ import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import { normalizeCharacterSet } from "./ascii/charset";
 import { downloadBlob } from "./export/download";
 import { exportAsciiGif } from "./export/exportGif";
+import { getFinalPreviewCacheCompatibility } from "./export/finalPreviewCacheCompatibility";
 import { createCanvasPngBlob, createPngBlob, exportPng } from "./export/exportPng";
 import { exportAsciiPngSequence } from "./export/exportPngSequence";
 import { renderAsciiAnimationFrames } from "./export/renderAnimationFrames";
@@ -14,7 +15,10 @@ import { createAnimatedImageRenderer, type AnimatedImageRenderer } from "./proce
 import { loadFileAsImage, loadImageElement, imageToPreviewData, isSupportedImage } from "./processing/imageInput";
 import { isSupportedVideo, loadFileAsVideo, seekVideo, videoFrameToImageData } from "./processing/videoInput";
 import { extractSourceImagePalette } from "./quantization/sourcePalette";
-import { getRenderedPreviewCache } from "./renderer/useRenderedAnimationPreview";
+import {
+  createRenderedAnimationPreviewCacheKey,
+  getRenderedPreviewCache
+} from "./renderer/useRenderedAnimationPreview";
 import { useAsciiProcessor } from "./renderer/useAsciiProcessor";
 import type {
   AnimationPreviewFormat,
@@ -513,32 +517,66 @@ export default function App() {
   const getReusableFinalPreviewCache = useCallback(
     (options: { allowTransparentVideo?: boolean; format?: AnimationPreviewFormat } = {}) => {
       const preview = store.renderedPreview;
-      if (
-        preview.quality !== "final" ||
-        (options.format && preview.previewFormat !== options.format) ||
-        !preview.cacheKey ||
-        preview.status === "idle" ||
-        preview.status === "rendering" ||
-        preview.status === "stale" ||
-        preview.status === "error"
-      ) {
-        return null;
-      }
-      if (options.allowTransparentVideo === false && store.exportOptions.transparentBackground) {
-        return null;
-      }
+      const format = options.format ?? preview.previewFormat;
       const cache = getRenderedPreviewCache(preview.cacheKey);
-      if (
-        !cache ||
-        cache.quality !== "final" ||
-        cache.previewFormat !== preview.previewFormat ||
-        (options.format && cache.previewFormat !== options.format)
-      ) {
+      const outputWidth = grid ? Math.max(1, Math.round(grid.width * store.exportScale)) : null;
+      const outputHeight = grid ? Math.max(1, Math.round(grid.height * store.exportScale)) : null;
+      const compatibility = getFinalPreviewCacheCompatibility({
+        preview,
+        cache,
+        format,
+        fps: store.animation.fps,
+        duration: store.animation.loopDuration,
+        exportQuality: store.exportOptions.animatedExportQuality,
+        animationType: store.animation.type,
+        outputWidth,
+        outputHeight,
+        exportScale: store.exportScale,
+        transparentBackground: store.exportOptions.transparentBackground,
+        allowTransparentVideo: options.allowTransparentVideo ?? true
+      });
+      if (!compatibility.reusable || !imageAnimator) {
+        return null;
+      }
+
+      const expectedCacheKey = createRenderedAnimationPreviewCacheKey({
+        sourceKey: `${mediaKind}:${mediaVersion}`,
+        renderer: imageAnimator,
+        font: store.font,
+        ascii: store.ascii,
+        image: store.image,
+        frame: store.frame,
+        breakup: store.breakup,
+        color: store.color,
+        exportOptions: store.exportOptions,
+        exportScale: store.exportScale,
+        glyphMetrics,
+        animation: { ...store.animation, enabled: true },
+        quality: "final",
+        previewFormat: format
+      });
+      if (preview.cacheKey !== expectedCacheKey || cache?.key !== expectedCacheKey) {
         return null;
       }
       return cache;
     },
-    [store.exportOptions.transparentBackground, store.renderedPreview]
+    [
+      glyphMetrics,
+      grid,
+      imageAnimator,
+      mediaKind,
+      mediaVersion,
+      store.animation,
+      store.ascii,
+      store.breakup,
+      store.color,
+      store.exportOptions,
+      store.exportScale,
+      store.font,
+      store.frame,
+      store.image,
+      store.renderedPreview
+    ]
   );
 
   const createAnimatedPngSnapshot = useCallback(async () => {
@@ -610,6 +648,7 @@ export default function App() {
         font: store.font,
         ascii: store.ascii,
         color: store.color,
+        animation: store.animation,
         exportOptions: store.exportOptions,
         scale: store.exportScale,
         dpi: store.frame.dpi,
@@ -623,6 +662,7 @@ export default function App() {
     createAnimatedPngSnapshot,
     grid,
     store.ascii,
+    store.animation,
     store.color,
     store.exportOptions,
     store.exportScale,
@@ -648,6 +688,7 @@ export default function App() {
           font: store.font,
           ascii: store.ascii,
           color: store.color,
+          animation: store.animation,
           exportOptions: store.exportOptions,
           scale: store.exportScale,
           dpi: store.frame.dpi
@@ -657,7 +698,7 @@ export default function App() {
     } catch (error) {
       setStatus("Export failed");
     }
-  }, [createAnimatedPngSnapshot, grid, store.ascii, store.color, store.exportOptions, store.exportScale, store.font, store.frame.dpi]);
+  }, [createAnimatedPngSnapshot, grid, store.ascii, store.animation, store.color, store.exportOptions, store.exportScale, store.font, store.frame.dpi]);
 
   const handleExportSvg = useCallback(() => {
     if (!grid) {
@@ -670,6 +711,7 @@ export default function App() {
         font: store.font,
         ascii: store.ascii,
         color: store.color,
+        animation: store.animation,
         exportOptions: store.exportOptions,
         fileName: exportFileName(store.imageName, "svg")
       });
@@ -677,7 +719,7 @@ export default function App() {
     } catch (error) {
       setStatus("Export failed");
     }
-  }, [grid, store.ascii, store.color, store.exportOptions, store.font, store.imageName]);
+  }, [grid, store.ascii, store.animation, store.color, store.exportOptions, store.font, store.imageName]);
 
   const handleToggleVideoPlayback = useCallback(async () => {
     const source = videoSourceRef.current;
@@ -825,7 +867,7 @@ export default function App() {
       };
       const cachedFrames = getReusableFinalPreviewCache({ allowTransparentVideo: false, format: preferredExtension });
       if (cachedFrames) {
-        setStatus(preferredExtension === "mp4" ? "Exporting MP4 from final preview" : "Exporting WebM from final preview");
+        setStatus("Encoding from preview cache");
       }
       const result = await exportAsciiFrameSequence({
         sourceName: store.imageName,
@@ -911,7 +953,7 @@ export default function App() {
       };
       const cachedFrames = getReusableFinalPreviewCache({ format: "gif" });
       if (cachedFrames) {
-        setStatus("Exporting GIF from final preview");
+        setStatus("Encoding from preview cache");
       }
       await exportAsciiGif({
         sourceName: store.imageName,
@@ -977,7 +1019,7 @@ export default function App() {
       };
       const cachedFrames = getReusableFinalPreviewCache({ format: "png-sequence" });
       if (cachedFrames) {
-        setStatus("Exporting PNG sequence from final preview");
+        setStatus("Saving from preview cache");
       }
       await exportAsciiPngSequence({
         sourceName: store.imageName,

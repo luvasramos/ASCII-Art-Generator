@@ -113,7 +113,8 @@ export const useAsciiProcessor = ({ imageData, font, ascii, image, frame, breaku
           : null,
         ascii.glyphMode
       ),
-      ascii.renderResolution
+      ascii.renderResolution,
+      ascii.glyphMode
     );
 
     const request: WorkerRequest = {

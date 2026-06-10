@@ -12,6 +12,7 @@ interface EchoCompositeArgs {
   currentLayerCanvas: HTMLCanvasElement;
   history: EchoFrameHistory;
   animation?: AnimationSettings;
+  binaryAlpha?: boolean;
 }
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
@@ -72,6 +73,18 @@ const createTintedDebugLayer = (sourceCanvas: HTMLCanvasElement, color: string) 
   context.fillRect(0, 0, canvas.width, canvas.height);
   context.globalCompositeOperation = "source-over";
   return canvas;
+};
+
+const thresholdCanvasAlpha = (canvas: HTMLCanvasElement) => {
+  const context = canvas.getContext("2d", { alpha: true });
+  if (!context) {
+    return;
+  }
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  for (let index = 3; index < imageData.data.length; index += 4) {
+    imageData.data[index] = imageData.data[index] >= 128 ? 255 : 0;
+  }
+  context.putImageData(imageData, 0, 0);
 };
 
 export const createEchoFrameHistory = (): EchoFrameHistory => ({
@@ -142,7 +155,8 @@ export const compositeEchoFrame = ({
   targetCanvas,
   currentLayerCanvas,
   history,
-  animation
+  animation,
+  binaryAlpha = false
 }: EchoCompositeArgs) => {
   const width = Math.max(1, currentLayerCanvas.width);
   const height = Math.max(1, currentLayerCanvas.height);
@@ -166,7 +180,8 @@ export const compositeEchoFrame = ({
     if (!frame) {
       continue;
     }
-    targetContext.globalAlpha = animation ? resolveEchoLayerAlpha(animation, index, count) : 0;
+    const layerAlpha = animation ? resolveEchoLayerAlpha(animation, index, count) : 0;
+    targetContext.globalAlpha = binaryAlpha ? (layerAlpha > 0.001 ? 1 : 0) : layerAlpha;
     targetContext.drawImage(
       debug ? createTintedDebugLayer(frame, debugColors[index] ?? "#ffffff") : frame,
       0,
@@ -176,4 +191,7 @@ export const compositeEchoFrame = ({
 
   targetContext.globalAlpha = 1;
   targetContext.drawImage(debug ? createTintedDebugLayer(currentLayerCanvas, "#ffffff") : currentLayerCanvas, 0, 0);
+  if (binaryAlpha) {
+    thresholdCanvasAlpha(targetCanvas);
+  }
 };

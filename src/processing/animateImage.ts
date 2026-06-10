@@ -32,6 +32,11 @@ const normalizedLoopTime = (timeSeconds: number, loopDuration: number) => {
   return ((timeSeconds % duration) + duration) % duration / duration;
 };
 
+const effectLoopProgress = (timeSeconds: number, settings: AnimationSettings) => {
+  const loops = Number.isFinite(settings.effectLoopsPerLoop) ? settings.effectLoopsPerLoop : 1;
+  return (normalizedLoopTime(timeSeconds, settings.loopDuration) * Math.max(0.1, loops)) % 1;
+};
+
 const computeDisplacement = (
   axisPosition: number,
   crossPosition: number,
@@ -40,9 +45,8 @@ const computeDisplacement = (
   amountPixels: number
 ) => {
   const strength = settings.strength / 100;
-  const velocity = settings.velocity / 100;
   const phase = progress * TAU;
-  const travel = 0.42 + velocity * 2.85;
+  const travel = 2.7;
   const frequency = 1.2 + strength * 4.8;
   const secondaryFrequency = 0.9 + strength * 2.7;
   const tertiaryFrequency = 2.1 + strength * 3.4;
@@ -117,7 +121,7 @@ export const createAnimatedImageRenderer = (
         return new ImageData(new Uint8ClampedArray(source.data), width, height);
       }
 
-      const progress = normalizedLoopTime(timeSeconds, settings.loopDuration);
+      const progress = effectLoopProgress(timeSeconds, settings);
       const amountPixels = Math.max(0, Math.min(width, height) * 0.07 * (settings.intensity / 100));
 
       if (settings.direction === "horizontal") {

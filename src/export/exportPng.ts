@@ -1,16 +1,18 @@
 import { createGlyphAtlas } from "../atlas/glyphAtlas";
 import { createImageGlyphAtlas } from "../atlas/imageGlyphAtlas";
 import { renderAsciiToCanvas } from "../renderer/layeredCanvasRenderer";
-import type { AsciiSettings, ColorSettings, ExportOptions, FontSettings, RenderGrid } from "../renderer/types";
+import type { AnimationSettings, AsciiSettings, ColorSettings, ExportOptions, FontSettings, RenderGrid } from "../renderer/types";
 import { normalizeCharacterSet } from "../ascii/charset";
 import { downloadBlob } from "./download";
 import { scaleFontForRenderResolution } from "../renderer/geometry";
+import { forceStrictDuotoneCanvas, shouldForceStrictDuotonePixels } from "../renderer/strictDuotone";
 
 interface ExportPngArgs {
   grid: RenderGrid;
   font: FontSettings;
   ascii: AsciiSettings;
   color: ColorSettings;
+  animation?: AnimationSettings;
   exportOptions: ExportOptions;
   scale: number;
   dpi: number;
@@ -158,7 +160,7 @@ export const createCanvasPngBlob = (canvas: HTMLCanvasElement, dpi?: number) =>
     }
   }).then((blob) => (typeof dpi === "number" ? applyPngDpi(blob, dpi) : blob));
 
-export const createPngBlob = async ({ grid, font, ascii, color, exportOptions, scale, dpi }: RenderPngArgs) => {
+export const createPngBlob = async ({ grid, font, ascii, color, animation, exportOptions, scale, dpi }: RenderPngArgs) => {
   const renderFont = scaleFontForRenderResolution(font, ascii.renderResolution);
   const exportFont: FontSettings = {
     ...renderFont,
@@ -192,9 +194,13 @@ export const createPngBlob = async ({ grid, font, ascii, color, exportOptions, s
     font: exportFont,
     ascii,
     color,
+    transitionAccent: animation,
     exportOptions,
     scale: 1
   });
+  if (shouldForceStrictDuotonePixels({ color, animation, font })) {
+    forceStrictDuotoneCanvas(canvas, color, exportOptions);
+  }
 
   return createCanvasPngBlob(canvas, dpi);
 };

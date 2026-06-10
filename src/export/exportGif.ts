@@ -15,9 +15,14 @@ import type {
   RenderedPreviewFrameSource
 } from "../renderer/renderedPreviewModel";
 import { downloadBlob } from "./download";
-import { isEchoActive, resolveEchoLayerAlpha } from "../renderer/echoComposite";
 import { resolveAnimationFrameCount } from "../renderer/animationTiming";
 import { resolveAnimatedExportFps, resolveAnimatedExportProfile } from "./exportQuality";
+import {
+  forceStrictDuotoneCanvas,
+  hintsOfColorCanRender,
+  matrixTransitionColorCanRender,
+  shouldForceStrictDuotonePixels
+} from "../renderer/strictDuotone";
 import { cachedAnimationFrameMatches, renderCachedAnimationFrames } from "./cachedAnimationFrames";
 import { renderAsciiAnimationFrames } from "./renderAnimationFrames";
 
@@ -180,29 +185,12 @@ const invertRgb = (color: RgbColor): RgbColor => ({
   b: 255 - color.b
 });
 
-const buildEchoBlendStops = (animation: AnimationSettings, desiredCount: number) => {
-  const count = Math.max(0, Math.round(animation.echoCount));
-  const stops = new Set<number>([0, 1]);
-  for (let index = 0; index < count; index += 1) {
-    stops.add(Math.max(0, Math.min(1, resolveEchoLayerAlpha(animation, index, count))));
-  }
-  for (let index = 1; stops.size < desiredCount && index < desiredCount - 1; index += 1) {
-    stops.add(index / Math.max(1, desiredCount - 1));
-  }
-  return [...stops].sort((a, b) => a - b);
-};
-
 const buildMatrixTransitionPaletteStops = (
   animation: AnimationSettings | undefined,
   background: RgbColor,
   foreground: RgbColor
 ) => {
-  const matrixCanRender = animation?.type === "matrix" || animation?.matrixOverlayEnabled;
-  if (
-    !animation?.matrixTransitionColorEnabled ||
-    !matrixCanRender ||
-    animation.matrixTransitionAmount <= 0
-  ) {
+  if (!animation || !matrixTransitionColorCanRender(animation)) {
     return [];
   }
   const transition = hexToRgb(animation.matrixTransitionColor);
@@ -238,22 +226,31 @@ const buildPalette = (
   const duotoneBackground = hexToRgb(color.backgroundColor) ?? background;
   const foreground = hexToRgb(color.foregroundColor) ?? { r: 255, g: 255, b: 255 };
   const mode = color.paletteMode as string;
-  const echoAnimation = isEchoActive(animation) ? animation : null;
-  const matrixTransitionStops = buildMatrixTransitionPaletteStops(animation, background, foreground);
+  const strictDuotoneMode = mode === "single" || mode === "duotone";
+  const duotoneHitAccent =
+    strictDuotoneMode &&
+    hintsOfColorCanRender(color, animation)
+      ? hexToRgb(color.hitsOfColor.color)
+      : null;
+  const duotoneTransitionActive = matrixTransitionColorCanRender(animation);
+  const duotoneTransitionAccent =
+    strictDuotoneMode && duotoneTransitionActive && animation
+      ? hexToRgb(animation.matrixTransitionColor)
+      : null;
+  const matrixTransitionStops = strictDuotoneMode
+    ? duotoneTransitionAccent
+      ? [duotoneTransitionAccent]
+      : []
+    : buildMatrixTransitionPaletteStops(animation, background, foreground);
   let palette: RgbColor[];
 
-  if (mode === "single" || mode === "duotone") {
-    if (echoAnimation) {
-      const desiredCount = Math.max(
-        2,
-        Math.min(usableColors, Math.max(8, Math.min(profile.paletteSize, Math.round(echoAnimation.echoCount) + 3)))
-      );
-      palette = buildEchoBlendStops(echoAnimation, desiredCount).map((value) =>
-        interpolateColor([duotoneBackground, foreground], value)
-      );
-    } else {
-      palette = [duotoneBackground, foreground].slice(0, usableColors);
-    }
+  if (strictDuotoneMode) {
+    palette = [
+      duotoneBackground,
+      foreground,
+      ...(duotoneHitAccent ? [duotoneHitAccent] : []),
+      ...(duotoneTransitionAccent ? [duotoneTransitionAccent] : [])
+    ].slice(0, usableColors);
   } else if (mode === "source" && color.sourceColorMapping === "source-match") {
     const stops = (color.sourcePalette.length ? color.sourcePalette : [color.backgroundColor, color.foregroundColor])
       .map(hexToRgb)
@@ -791,6 +788,7 @@ export const exportAsciiGif = async ({
   const transparentIndex = exportOptions.transparentBackground ? 0 : null;
   const alphaThreshold = (exportOptions.alphaThreshold / 100) * 255;
   const useCachedFrames = cachedAnimationFrameMatches(cachedFrames, normalizedFps, totalFrames);
+  const strictDuotonePixelGuard = shouldForceStrictDuotonePixels({ color, animation, font });
 
   const encode = async (mode: "optimized" | "safe") => {
     const quantizer = new PaletteQuantizer(palette, transparentIndex);
@@ -799,7 +797,7 @@ export const exportAsciiGif = async ({
 
     onStatus?.(
       useCachedFrames
-        ? `Encoding GIF from final preview: ${totalFrames} frames, ${palette.length} colors, ${normalizedFps}fps`
+        ? `Encoding GIF from preview cache: ${totalFrames} frames, ${palette.length} colors, ${normalizedFps}fps`
         : safeMode
         ? `Rendering safe GIF fallback: ${totalFrames} full frames, ${palette.length} colors, ${normalizedFps}fps`
         : `Rendering optimized GIF: ${totalFrames} frames, ${palette.length} active colors, ${normalizedFps}fps`
@@ -829,6 +827,9 @@ export const exportAsciiGif = async ({
 
     for await (const renderedFrame of renderedFrames) {
       throwIfAborted(signal);
+      if (strictDuotonePixelGuard) {
+        forceStrictDuotoneCanvas(renderedFrame.canvas, color, exportOptions);
+      }
       if (!encoder) {
         encoder = new GifEncoder(
           renderedFrame.canvas.width,
@@ -846,9 +847,11 @@ export const exportAsciiGif = async ({
       );
       onProgress?.((renderedFrame.frameIndex + 1) / renderedFrame.totalFrames);
       onStatus?.(
-        safeMode
-          ? `Encoding safe GIF frame ${renderedFrame.frameIndex + 1} of ${renderedFrame.totalFrames}`
-          : `Encoding optimized GIF frame ${renderedFrame.frameIndex + 1} of ${renderedFrame.totalFrames}`
+        useCachedFrames
+          ? `Encoding cached GIF frame ${renderedFrame.frameIndex + 1} of ${renderedFrame.totalFrames}`
+          : safeMode
+            ? `Encoding safe GIF frame ${renderedFrame.frameIndex + 1} of ${renderedFrame.totalFrames}`
+            : `Encoding optimized GIF frame ${renderedFrame.frameIndex + 1} of ${renderedFrame.totalFrames}`
       );
       if (renderedFrame.frameIndex % 2 === 1) {
         await yieldToBrowser();

@@ -5,6 +5,41 @@ const clamp = (value: number, min: number, max: number) => Math.min(max, Math.ma
 const measurementCanvas = document.createElement("canvas");
 const measurementCtx = measurementCanvas.getContext("2d");
 
+const fitCellGeometryToLayout = (
+  layoutWidth: number,
+  layoutHeight: number,
+  columns: number,
+  rows: number,
+  gapFraction: number,
+  squareCells: boolean
+) => {
+  const fittedCellWidth = layoutWidth / Math.max(1, columns + (columns - 1) * gapFraction);
+  const fittedCellHeight = layoutHeight / Math.max(1, rows + (rows - 1) * gapFraction);
+
+  if (!squareCells) {
+    return {
+      cellWidth: fittedCellWidth,
+      cellHeight: fittedCellHeight,
+      gapX: fittedCellWidth * gapFraction,
+      gapY: fittedCellHeight * gapFraction
+    };
+  }
+
+  const squareCellSize = Math.max(1, Math.min(fittedCellWidth, fittedCellHeight));
+  const baseGap = squareCellSize * gapFraction;
+  const extraGapX =
+    columns > 1 ? Math.max(0, layoutWidth - columns * squareCellSize - (columns - 1) * baseGap) / (columns - 1) : 0;
+  const extraGapY =
+    rows > 1 ? Math.max(0, layoutHeight - rows * squareCellSize - (rows - 1) * baseGap) / (rows - 1) : 0;
+
+  return {
+    cellWidth: squareCellSize,
+    cellHeight: squareCellSize,
+    gapX: columns > 1 ? baseGap + extraGapX : 0,
+    gapY: rows > 1 ? baseGap + extraGapY : 0
+  };
+};
+
 export const measureCellGeometry = (
   imageWidth: number,
   imageHeight: number,
@@ -39,14 +74,13 @@ export const measureCellGeometry = (
   const rows = clamp(Math.round(columns * heightOverWidth * (cellWidth / cellHeight)), 18, 260);
   const spacingRatio = clamp(cellSpacing / 100, 0, 1);
   const gapFraction = spacingRatio * 0.55;
-  const fittedCellWidth = layoutWidth / Math.max(1, columns + (columns - 1) * gapFraction);
-  const fittedCellHeight = layoutHeight / Math.max(1, rows + (rows - 1) * gapFraction);
+  const fitted = fitCellGeometryToLayout(layoutWidth, layoutHeight, columns, rows, gapFraction, glyphMode === "images");
 
   return {
-    cellWidth: fittedCellWidth,
-    cellHeight: fittedCellHeight,
-    gapX: fittedCellWidth * gapFraction,
-    gapY: fittedCellHeight * gapFraction,
+    cellWidth: fitted.cellWidth,
+    cellHeight: fitted.cellHeight,
+    gapX: fitted.gapX,
+    gapY: fitted.gapY,
     columns,
     rows
   };
@@ -57,7 +91,8 @@ export const getRenderResolutionScale = (renderResolution = 100) =>
 
 export const applyRenderResolutionToGeometry = (
   geometry: CellGeometry,
-  renderResolution = 100
+  renderResolution = 100,
+  glyphMode: AsciiGlyphMode = "characters"
 ): CellGeometry => {
   const scale = getRenderResolutionScale(renderResolution);
   if (Math.abs(scale - 1) < 0.001) {
@@ -70,16 +105,24 @@ export const applyRenderResolutionToGeometry = (
   const rows = Math.max(1, Math.round(geometry.rows * scale));
   const gapRatioX = geometry.cellWidth > 0 ? geometry.gapX / geometry.cellWidth : 0;
   const gapRatioY = geometry.cellHeight > 0 ? geometry.gapY / geometry.cellHeight : 0;
-  const cellWidth = width / Math.max(1, columns + (columns - 1) * gapRatioX);
-  const cellHeight = height / Math.max(1, rows + (rows - 1) * gapRatioY);
+  const gapFraction = glyphMode === "images" ? Math.max(0, Math.min(gapRatioX, gapRatioY)) : 0;
+  const fitted =
+    glyphMode === "images"
+      ? fitCellGeometryToLayout(width, height, columns, rows, gapFraction, true)
+      : {
+          cellWidth: width / Math.max(1, columns + (columns - 1) * gapRatioX),
+          cellHeight: height / Math.max(1, rows + (rows - 1) * gapRatioY),
+          gapX: 0,
+          gapY: 0
+        };
 
   return {
     columns,
     rows,
-    cellWidth,
-    cellHeight,
-    gapX: cellWidth * gapRatioX,
-    gapY: cellHeight * gapRatioY
+    cellWidth: fitted.cellWidth,
+    cellHeight: fitted.cellHeight,
+    gapX: glyphMode === "images" ? fitted.gapX : fitted.cellWidth * gapRatioX,
+    gapY: glyphMode === "images" ? fitted.gapY : fitted.cellHeight * gapRatioY
   };
 };
 

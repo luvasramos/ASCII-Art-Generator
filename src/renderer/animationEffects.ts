@@ -63,15 +63,17 @@ const linearPingPong = (progress: number) => {
   return wrapped < 0.5 ? wrapped * 2 : (1 - wrapped) * 2;
 };
 
-const scaleCycleCount = (animation: AnimationSettings) =>
-  Math.max(1, 1 + Math.floor(clamp01(animation.velocity / 400) * 3.999));
+const getEffectLoopProgress = (animation: AnimationSettings, timeSeconds: number) => {
+  const clock = resolveAnimationClock(animation, timeSeconds);
+  return (clock.progress * Math.max(0.1, animation.effectLoopsPerLoop)) % 1;
+};
 
 const getScaleProgress = (animation: AnimationSettings, timeSeconds: number) => {
-  const clock = resolveAnimationClock(animation, timeSeconds);
+  const effectProgress = getEffectLoopProgress(animation, timeSeconds);
   if (animation.scaleMovement === "constant") {
-    return linearPingPong(clock.progress * scaleCycleCount(animation));
+    return linearPingPong(effectProgress);
   }
-  return clock.pingPong;
+  return smootherstep(0.5 - Math.cos(effectProgress * TAU) * 0.5);
 };
 
 export const getPingPongProgress = (animation: AnimationSettings, timeSeconds: number) => {
@@ -81,10 +83,8 @@ export const getPingPongProgress = (animation: AnimationSettings, timeSeconds: n
 const getContinuousProgress = (animation: AnimationSettings, timeSeconds: number) =>
   resolveAnimationClock(animation, timeSeconds).progress;
 
-const getSpinProgress = (animation: AnimationSettings, timeSeconds: number) => {
-  const speedCycles = 1 + clamp01(animation.velocity / 400) * 3;
-  return (resolveAnimationClock(animation, timeSeconds).progress * speedCycles) % 1;
-};
+const getSpinRotationProgress = (animation: AnimationSettings, timeSeconds: number) =>
+  resolveAnimationClock(animation, timeSeconds).progress * Math.max(0.05, animation.spinRotationsPerLoop);
 
 const variedProgress = (cell: CellRenderData, amount: number, animation: AnimationSettings, salt: number) => {
   const variation = clamp01(animation.characterVariation / 100);
@@ -248,54 +248,6 @@ const applyFadeIntensity = (
   return {
     ...grid,
     cells: nextCells
-  };
-};
-
-const applyScaleVariation = (
-  grid: RenderGrid,
-  ascii: AsciiSettings,
-  glyphMetrics: GlyphMetric[] | undefined,
-  animation: AnimationSettings,
-  amount: number
-): RenderGrid => {
-  const variation = clamp01(animation.characterVariation / 100);
-  if (variation <= 0) {
-    return grid;
-  }
-
-  if (ascii.glyphMode === "images") {
-    return {
-      ...grid,
-      cells: grid.cells.map((cell): CellRenderData => {
-        const local = variedProgress(cell, amount, animation, 59);
-        return {
-          ...cell,
-          foreground: clamp01(cell.foreground * (0.86 + local * variation * 0.28))
-        };
-      })
-    };
-  }
-
-  const glyphs = glyphMetrics?.length ? sortGlyphsByDensity(glyphMetrics) : [];
-  if (glyphs.length < 2) {
-    return grid;
-  }
-
-  const byGlyph = new Map(glyphs.map((glyph) => [glyph.glyph, glyph]));
-  return {
-    ...grid,
-    cells: grid.cells.map((cell): CellRenderData => {
-      if (!cell.glyph || cell.glyph === " ") {
-        return cell;
-      }
-      const local = variedProgress(cell, amount, animation, 67);
-      const currentDensity = byGlyph.get(cell.glyph)?.density ?? cell.foreground;
-      const densityShift = (local - 0.5) * variation * 0.48;
-      return {
-        ...cell,
-        glyph: nearestGlyph(glyphs, clamp01(currentDensity * (1 + densityShift)))
-      };
-    })
   };
 };
 
@@ -486,21 +438,29 @@ export const resolveRenderAnimationState = (
   }
 
   if (animation.type === "matrix") {
+    const matrixEffectProgress = getEffectLoopProgress(animation, timeSeconds);
+    const matrixAmount = linearPingPong(matrixEffectProgress);
+    const matrixCharacterAnimation: AnimationSettings = {
+      ...animation,
+      characterVariation: 0,
+      matrixOverlayEnabled: false,
+      matrixTransitionColorEnabled: false
+    };
+
     return {
       brightnessMultiplier: 1,
       glyphAlphaMultiplier: 1,
       glyphScaleMultiplier: 1,
-      grid: withMatrixOverlay(applyMatrixGlyphs(grid, ascii, animation, amount, progress))
+      grid: applyMatrixGlyphs(grid, ascii, matrixCharacterAnimation, matrixAmount, matrixEffectProgress)
     };
   }
 
   if (animation.type === "scale") {
-    const scaleAmount = getScaleProgress(animation, timeSeconds);
     return {
       brightnessMultiplier: 1,
       glyphAlphaMultiplier: 1,
       glyphScaleMultiplier: 1,
-      grid: withMatrixOverlay(applyScaleVariation(grid, ascii, glyphMetrics, animation, scaleAmount))
+      grid: withMatrixOverlay(grid)
     };
   }
 
@@ -557,7 +517,7 @@ export const resolveAnimatedProcessingSettings = (
       image,
       frame: {
         ...frame,
-        imageRotation: frame.imageRotation + direction * getSpinProgress(animation, timeSeconds) * 360
+        imageRotation: frame.imageRotation + direction * getSpinRotationProgress(animation, timeSeconds) * 360
       },
       breakup
     };

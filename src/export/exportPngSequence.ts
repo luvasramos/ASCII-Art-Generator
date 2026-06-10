@@ -18,6 +18,7 @@ import { resolveAnimationFrameCount } from "../renderer/animationTiming";
 import { cachedAnimationFrameMatches, renderCachedAnimationFrames } from "./cachedAnimationFrames";
 import { downloadBlob } from "./download";
 import { resolveAnimatedExportFps } from "./exportQuality";
+import { forceStrictDuotoneCanvas, shouldForceStrictDuotonePixels } from "../renderer/strictDuotone";
 import { createCanvasPngBlob } from "./exportPng";
 import { renderAsciiAnimationFrames } from "./renderAnimationFrames";
 import { createStoredZipBlob, type StoredZipFile } from "./zip";
@@ -103,6 +104,7 @@ export const exportAsciiPngSequence = async ({
   const files: StoredZipFile[] = [];
   let accumulatedPngBytes = 0;
   const useCachedFrames = cachedAnimationFrameMatches(cachedFrames, normalizedFps, totalFrames);
+  const strictDuotonePixelGuard = shouldForceStrictDuotonePixels({ color, animation, font });
 
   onStatus?.(useCachedFrames ? "Preparing PNG sequence from final preview" : "Preparing PNG sequence");
   onProgress?.(0);
@@ -110,8 +112,7 @@ export const exportAsciiPngSequence = async ({
   const renderedFrames = useCachedFrames && cachedFrames
     ? renderCachedAnimationFrames({
         cache: cachedFrames,
-        signal,
-        onFrameStart: (frameIndex, frameTotal) => onStatus?.(`Using final preview frame ${frameIndex + 1} of ${frameTotal}`)
+        signal
       })
     : renderAsciiAnimationFrames({
         duration,
@@ -132,6 +133,9 @@ export const exportAsciiPngSequence = async ({
 
   for await (const renderedFrame of renderedFrames) {
     throwIfAborted(signal);
+    if (strictDuotonePixelGuard) {
+      forceStrictDuotoneCanvas(renderedFrame.canvas, color, exportOptions);
+    }
     if (!useCachedFrames) {
       onStatus?.(`Rendering frame ${renderedFrame.frameIndex + 1} of ${renderedFrame.totalFrames}`);
     }
@@ -159,7 +163,7 @@ export const exportAsciiPngSequence = async ({
   }
 
   throwIfAborted(signal);
-  onStatus?.("Writing ZIP");
+  onStatus?.(useCachedFrames ? "Saving from preview cache" : "Writing ZIP");
   onProgress?.(0.96);
   await yieldToBrowser();
   const zipBlob = createStoredZipBlob(files);

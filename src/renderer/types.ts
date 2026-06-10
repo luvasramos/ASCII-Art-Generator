@@ -148,10 +148,12 @@ export interface AnimationSettings {
   scaleMin: number;
   scaleMax: number;
   scaleMovement: AnimationScaleMovement;
+  effectLoopsPerLoop: number;
   matrixLoopStyle: AnimationLoopStyle;
   matrixTransitionColorEnabled: boolean;
   matrixTransitionColor: string;
   matrixTransitionAmount: number;
+  spinRotationsPerLoop: number;
   spinDirection: AnimationSpinDirection;
   ambientDirection: AmbientDirection;
   ambientAngle: number;
@@ -226,6 +228,14 @@ export interface ColorSettings {
   backgroundColor: string;
   duotoneThreshold: number;
   customPalette: string[];
+  hitsOfColor: {
+    enabled: boolean;
+    color: string;
+    amount: number;
+    seed: number;
+    animated: boolean;
+    animatedHintAmount: number;
+  };
   sourcePaletteOriginal: string[];
   sourcePalette: string[];
   sourcePaletteSize: number;

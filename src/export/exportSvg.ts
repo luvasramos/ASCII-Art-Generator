@@ -3,7 +3,13 @@ import { getImageGlyphIndexForBrightness } from "../atlas/imageGlyphAtlas";
 import { resolveCellFittedFontSize } from "../atlas/glyphAtlas";
 import { normalizeCharacterSet } from "../ascii/charset";
 import { createImageGlyphBrightnessMapper } from "../renderer/imageGlyphDistribution";
-import type { AsciiSettings, ColorSettings, ExportOptions, FontSettings, RenderGrid } from "../renderer/types";
+import {
+  resolveDuotoneHitsOfColor,
+  resolveDuotoneTransitionColor,
+  shouldUseStaticDuotoneHitColor
+} from "../renderer/duotoneTransitionAccent";
+import { matrixTransitionColorCanRender } from "../renderer/strictDuotone";
+import type { AnimationSettings, AsciiSettings, ColorSettings, ExportOptions, FontSettings, RenderGrid } from "../renderer/types";
 import { downloadBlob } from "./download";
 import { scaleFontForRenderResolution } from "../renderer/geometry";
 
@@ -12,6 +18,7 @@ interface ExportSvgArgs {
   font: FontSettings;
   ascii: AsciiSettings;
   color: ColorSettings;
+  animation?: AnimationSettings;
   exportOptions: ExportOptions;
   fileName: string;
 }
@@ -36,7 +43,7 @@ const formatNumber = (value: number) => {
   return value.toFixed(3).replace(/\.?0+$/, "");
 };
 
-export const exportSvg = ({ grid, font, ascii, color, exportOptions, fileName }: ExportSvgArgs) => {
+export const exportSvg = ({ grid, font, ascii, color, animation, exportOptions, fileName }: ExportSvgArgs) => {
   const width = Math.max(1, Math.ceil(grid.width));
   const height = Math.max(1, Math.ceil(grid.height));
   const cellWidth = grid.cellWidth;
@@ -69,6 +76,18 @@ export const exportSvg = ({ grid, font, ascii, color, exportOptions, fileName }:
     const index = getImageGlyphIndexForBrightness(brightness, imageGlyphs.length);
     imageGlyphMapper?.record(index);
     return imageGlyphs[Math.min(imageGlyphs.length - 1, Math.max(0, index))] ?? null;
+  };
+  const resolveGlyphFill = (cell: RenderGrid["cells"][number]) => {
+    if (sourceMatchMode) {
+      return resolveDisplaySourceMatchColor(cell, color);
+    }
+    if (duotoneMode && animation && matrixTransitionColorCanRender(animation) && (cell.matrixTransition ?? 0) > 0) {
+      return resolveDuotoneTransitionColor(animation, color);
+    }
+    if (duotoneMode && shouldUseStaticDuotoneHitColor(cell, color, ascii)) {
+      return resolveDuotoneHitsOfColor(color);
+    }
+    return resolveDisplayCellColor(quantizeBrightness(cell.foreground), color, "foreground");
   };
   const imageTintFilters = new Map<string, string>();
   const imageTintFilterDefs: string[] = [];
@@ -121,22 +140,17 @@ export const exportSvg = ({ grid, font, ascii, color, exportOptions, fileName }:
         if (!imageGlyph) {
           return "";
         }
-        const fill = sourceMatchMode
-          ? resolveDisplaySourceMatchColor(cell, color)
-          : resolveDisplayCellColor(quantizeBrightness(cell.foreground), color, "foreground");
+        const fill = resolveGlyphFill(cell);
         const filterId = getImageTintFilterId(fill);
-        const drawWidth = cellWidth * ascii.characterScale;
-        const drawHeight = cellHeight * ascii.characterScale;
+        const drawSize = Math.min(cellWidth, cellHeight) * ascii.characterScale;
         const opacity = !duotoneMode && cell.foregroundAlpha < 1 ? ` opacity="${formatNumber(cell.foregroundAlpha)}"` : "";
         return `<image href="${escapeAttribute(imageGlyph.dataUrl)}" x="${formatNumber(
-          cell.x * stepX + (cellWidth - drawWidth) / 2
-        )}" y="${formatNumber(cell.y * stepY + (cellHeight - drawHeight) / 2)}" width="${formatNumber(
-          drawWidth
-        )}" height="${formatNumber(drawHeight)}" preserveAspectRatio="xMidYMid slice" filter="url(#${filterId})"${opacity} />`;
+          cell.x * stepX + cellWidth / 2 - drawSize / 2
+        )}" y="${formatNumber(cell.y * stepY + cellHeight / 2 - drawSize / 2)}" width="${formatNumber(
+          drawSize
+        )}" height="${formatNumber(drawSize)}" preserveAspectRatio="xMidYMid slice" filter="url(#${filterId})"${opacity} />`;
       }
-      const fill = sourceMatchMode
-        ? resolveDisplaySourceMatchColor(cell, color)
-        : resolveDisplayCellColor(quantizeBrightness(cell.foreground), color, "foreground");
+      const fill = resolveGlyphFill(cell);
       const opacity = !duotoneMode && cell.foregroundAlpha < 1 ? ` opacity="${formatNumber(cell.foregroundAlpha)}"` : "";
       return `<text x="${formatNumber(cell.x * stepX + cellWidth / 2)}" y="${formatNumber(
         cell.y * stepY + cellHeight / 2

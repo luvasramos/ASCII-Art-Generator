@@ -16,6 +16,7 @@ import type {
   RenderedPreviewFrameSource
 } from "../renderer/renderedPreviewModel";
 import { resolveAnimationFrameCount } from "../renderer/animationTiming";
+import { forceStrictDuotoneCanvas, shouldForceStrictDuotonePixels } from "../renderer/strictDuotone";
 import { cachedAnimationFrameMatches, renderCachedAnimationFrames } from "./cachedAnimationFrames";
 import { downloadBlob } from "./download";
 import { formatBitrate, resolveAnimatedExportFps, resolveVideoEncodingSettings } from "./exportQuality";
@@ -339,6 +340,13 @@ export const exportAsciiFrameSequence = async ({
   const normalizedFps = resolveAnimatedExportFps(fps, exportQuality, animation?.type);
   const totalFrames = resolveAnimationFrameCount(duration, normalizedFps);
   const useCachedFrames = cachedAnimationFrameMatches(cachedFrames, normalizedFps, totalFrames);
+  const strictDuotonePixelGuard = shouldForceStrictDuotonePixels({ color, animation, font });
+  const enforceStrictDuotoneFrame = (canvas: HTMLCanvasElement) => {
+    if (strictDuotonePixelGuard) {
+      forceStrictDuotoneCanvas(canvas, color, exportOptions);
+    }
+    return canvas;
+  };
 
   if (convertingToMp4) {
     logMp4Export("Runtime diagnostics before MP4 export", {
@@ -346,14 +354,12 @@ export const exportAsciiFrameSequence = async ({
       recorder: collectRecorderDiagnostics()
     });
 
-    onStatus?.("Preparing export");
+    onStatus?.(useCachedFrames ? "Encoding from preview cache" : "Preparing export");
     onProgress?.(0);
     const renderedFrames = useCachedFrames && cachedFrames
       ? renderCachedAnimationFrames({
           cache: cachedFrames,
-          signal,
-          onFrameStart: (frameIndex, frameTotal) =>
-            onStatus?.(`Using final preview frame ${frameIndex + 1} of ${frameTotal}`)
+          signal
         })
       : renderAsciiAnimationFrames({
           duration,
@@ -378,7 +384,7 @@ export const exportAsciiFrameSequence = async ({
       throw new Error("Animation frame generation failed.");
     }
 
-    const firstCanvas = firstFrameResult.value.canvas;
+    const firstCanvas = enforceStrictDuotoneFrame(firstFrameResult.value.canvas);
     const outputWidth = firstCanvas.width + (firstCanvas.width % 2);
     const outputHeight = firstCanvas.height + (firstCanvas.height % 2);
     const encodingSettings = resolveVideoEncodingSettings({
@@ -405,8 +411,10 @@ export const exportAsciiFrameSequence = async ({
     });
 
     const mp4Frames = (async function* () {
+      enforceStrictDuotoneFrame(firstFrameResult.value.canvas);
       yield firstFrameResult.value;
       for await (const renderedFrame of renderedFrames) {
+        enforceStrictDuotoneFrame(renderedFrame.canvas);
         yield renderedFrame;
       }
     })();
@@ -480,9 +488,9 @@ export const exportAsciiFrameSequence = async ({
   let capturedFrameCount = 0;
 
   try {
-    onStatus?.("Preparing export");
+    onStatus?.(useCachedFrames ? "Encoding from preview cache" : "Preparing export");
     if (prerenderFrames) {
-      onStatus?.(useCachedFrames ? "Using final preview frames" : "Rendering frames");
+      onStatus?.(useCachedFrames ? "Encoding from preview cache" : "Rendering frames");
     }
 
     const initialFrames = useCachedFrames && cachedFrames
@@ -509,7 +517,7 @@ export const exportAsciiFrameSequence = async ({
         });
 
     for await (const renderedFrame of initialFrames) {
-      firstCanvas = renderedFrame.canvas;
+      firstCanvas = enforceStrictDuotoneFrame(renderedFrame.canvas);
       if (!prerenderFrames) {
         break;
       }
@@ -613,7 +621,11 @@ export const exportAsciiFrameSequence = async ({
       if (bufferedFrames.length) {
         for (let index = 0; index < bufferedFrames.length; index += 1) {
           throwIfAborted(signal);
-          onStatus?.(`Recording ${frameLabel} frame ${index + 1} of ${bufferedFrames.length}`);
+          onStatus?.(
+            useCachedFrames
+              ? `Encoding cached frame ${index + 1} of ${bufferedFrames.length}`
+              : `Recording ${frameLabel} frame ${index + 1} of ${bufferedFrames.length}`
+          );
           drawRecordingFrame(recordingCtx, recordingCanvas, bufferedFrames[index]);
           await captureCompletedFrame({ requestFrame, hasManualFrameRequest, signal });
           capturedFrameCount = index + 1;
@@ -646,8 +658,12 @@ export const exportAsciiFrameSequence = async ({
             });
         for await (const renderedFrame of liveFrames) {
           throwIfAborted(signal);
-          onStatus?.(`Rendering ${frameLabel} frame ${renderedFrame.frameIndex + 1} of ${renderedFrame.totalFrames}`);
-          drawRecordingFrame(recordingCtx, recordingCanvas, renderedFrame.canvas);
+          onStatus?.(
+            useCachedFrames
+              ? `Encoding cached frame ${renderedFrame.frameIndex + 1} of ${renderedFrame.totalFrames}`
+              : `Rendering ${frameLabel} frame ${renderedFrame.frameIndex + 1} of ${renderedFrame.totalFrames}`
+          );
+          drawRecordingFrame(recordingCtx, recordingCanvas, enforceStrictDuotoneFrame(renderedFrame.canvas));
           await captureCompletedFrame({ requestFrame, hasManualFrameRequest, signal });
           capturedFrameCount = renderedFrame.frameIndex + 1;
           emitRecordingProgress((renderedFrame.frameIndex + 1) / renderedFrame.totalFrames);

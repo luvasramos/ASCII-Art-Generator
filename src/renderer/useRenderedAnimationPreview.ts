@@ -57,7 +57,7 @@ interface RenderedAnimationPreviewProgress {
   progress: number;
 }
 
-export const MAX_RENDERED_PREVIEW_CACHE_BYTES = 384 * 1024 * 1024;
+export const MAX_RENDERED_PREVIEW_CACHE_BYTES = 1024 * 1024 * 1024;
 
 const renderedPreviewCaches = new Map<string, RenderedPreviewCache<RenderedPreviewFrameSource>>();
 
@@ -167,7 +167,7 @@ const assertRenderedPreviewCacheSize = (width: number, height: number, frameCoun
   throw new Error(
     `This preview is too large to cache (${formatBytes(
       estimatedBytes
-    )}). Try Fast preview quality, a shorter duration, or a lower FPS.`
+    )}). Try a smaller output size, a shorter duration, or a lower FPS.`
   );
 };
 
@@ -228,7 +228,7 @@ const describeRenderedPreviewError = (error: unknown) => {
     return message;
   }
   if (/canvas2d|canvas/i.test(message)) {
-    return "The browser could not create the rendered preview canvas. Try Fast preview quality or reload the app.";
+    return "The browser could not create the rendered preview canvas. Try a smaller output size or reload the app.";
   }
   if (/frame/i.test(message)) {
     return message;
@@ -479,7 +479,9 @@ export const useRenderedAnimationPreview = (args: RenderedAnimationPreviewArgs) 
 
   const cancel = useCallback(() => {
     const cancelHandle = cancelHandleRef.current;
+    const cacheKey = useStudioStore.getState().renderedPreview.cacheKey;
     cancelHandle?.cancel();
+    clearRenderedPreviewMemoryCache(cacheKey);
     useStudioStore.getState().cancelRenderedPreviewRender(cancelHandle?.id ?? null);
   }, []);
 

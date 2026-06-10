@@ -85,7 +85,19 @@ interface AnimatedAsciiPreviewArgs {
 const createPreviewClockKey = (animation: AnimationSettings) =>
   [
     animation.type,
-    animation.fps
+    animation.fps,
+    animation.loopDuration,
+    animation.effectLoopsPerLoop,
+    animation.spinRotationsPerLoop,
+    animation.spinDirection,
+    animation.velocity,
+    animation.scaleMovement,
+    animation.matrixLoopStyle,
+    animation.matrixOverlaySpeed,
+    animation.matrixOverlayChangeRate,
+    animation.direction,
+    animation.ambientDirection,
+    animation.ambientAngle
   ].join(":");
 
 const LIVE_PREVIEW_SCALE_STOPS = [1, 0.75, 0.66, 0.5, 0.425, 0.33, 0.25, 0.2, 0.16] as const;
@@ -1210,7 +1222,8 @@ export const useAnimatedAsciiPreview = ({
         }
         lastRenderedPreviewFrameIndex = previewFrameIndex;
 
-        const timeSeconds = elapsedSeconds;
+        const timelineFrameIndex = cacheEnabled ? cacheFrameIndex : previewFrameIndex;
+        const timeSeconds = timelineFrameIndex / livePreview.targetFps;
         const outputWidth = livePreview.previewWidth;
         const outputHeight = livePreview.previewHeight;
         const displayWidth = livePreview.previewWidth;
@@ -1329,7 +1342,8 @@ export const useAnimatedAsciiPreview = ({
               targetCanvas: temporaryEchoCanvas,
               currentLayerCanvas: temporaryGlyphCanvas,
               history: echoHistoryRef.current,
-              animation: latest.animation
+              animation: latest.animation,
+              binaryAlpha: latest.color.paletteMode === "single"
             });
             copyPreviewCanvasFrame(glyphCanvas, temporaryEchoCanvas, outputWidth, outputHeight, displayWidth, displayHeight);
             pushEchoFrame(echoHistoryRef.current, temporaryGlyphCanvas, latest.animation);

@@ -8,6 +8,7 @@ import {
   resolveAnimatedExportFps,
   resolveAnimatedExportProfile
 } from "../export/exportQuality";
+import { getFinalPreviewCacheCompatibility } from "../export/finalPreviewCacheCompatibility";
 import { getRenderedPreviewCache } from "../renderer/useRenderedAnimationPreview";
 import { defaultExportOptions } from "../state/defaults";
 import { useStudioStore } from "../state/useStudioStore";
@@ -162,20 +163,21 @@ export const TopLeftActions = ({
   const selectedAnimatedScaleSummaryLabel = selectedPngSequenceExport ? "Export scale" : "Video scale";
   const selectedPreviewFormat = isAnimationPreviewFormat(fileType) ? fileType : null;
   const renderedPreviewCache = getRenderedPreviewCache(renderedPreview.cacheKey);
-  const renderedPreviewStatusCanExport =
-    renderedPreview.status === "ready" || renderedPreview.status === "playing" || renderedPreview.status === "paused";
-  const finalPreviewCacheReusable = Boolean(
-    showAnimationExports &&
-      selectedPreviewFormat &&
-      renderedPreviewStatusCanExport &&
-      renderedPreview.quality === "final" &&
-      renderedPreview.previewFormat === selectedPreviewFormat &&
-      renderedPreviewCache &&
-      renderedPreviewCache.quality === "final" &&
-      renderedPreviewCache.previewFormat === selectedPreviewFormat &&
-      renderedPreviewCache.frames.length === renderedPreview.frameCount &&
-      !(selectedAnimatedVideoExport && exportOptions.transparentBackground)
-  );
+  const finalPreviewCompatibility = getFinalPreviewCacheCompatibility({
+    preview: renderedPreview,
+    cache: renderedPreviewCache,
+    format: selectedPreviewFormat,
+    fps: animationFps,
+    duration: animatedDuration,
+    exportQuality: exportOptions.animatedExportQuality,
+    animationType,
+    outputWidth,
+    outputHeight,
+    exportScale,
+    transparentBackground: exportOptions.transparentBackground,
+    allowTransparentVideo: !selectedAnimatedVideoExport
+  });
+  const finalPreviewCacheReusable = showAnimationExports && finalPreviewCompatibility.reusable;
   const finalPreviewCacheMessage =
     showAnimationExports && selectedPreviewFormat
       ? finalPreviewCacheReusable
@@ -200,7 +202,7 @@ export const TopLeftActions = ({
     showAnimatedControls &&
     ((outputWidth !== null && outputHeight !== null && (outputWidth > 1920 || outputHeight > 1080)) ||
       exportOptions.animatedExportQuality === "master");
-  const visibleStatus = /^(preparing|exporting|exported|copied|loading|writing|reading|rendering|recording|converting|finalizing|download ready|downloading|ffmpeg|mp4|webm|gif|png|svg|export failed|video export canceled|animation export canceled|gif export canceled)/i.test(
+  const visibleStatus = /^(preparing|exporting|exported|copied|loading|writing|reading|rendering|recording|encoding|saving|packaging|converting|finalizing|download ready|downloading|ffmpeg|mp4|webm|gif|png|svg|export failed|video export canceled|animation export canceled|gif export canceled)/i.test(
     status
   )
     ? status

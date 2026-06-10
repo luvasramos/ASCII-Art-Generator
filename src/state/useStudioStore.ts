@@ -230,9 +230,16 @@ const normalizeColor = (
     sourcePaletteOriginal?: unknown;
     sourceColorMapping?: unknown;
     sourceMatchBackground?: unknown;
+    hitsOfColor?: unknown;
+    hintsOfColor?: unknown;
   }
 ): ColorSettings => {
   const sourcePalette = normalizeSourcePalette(color?.sourcePalette);
+  const hitsOfColor: Record<string, unknown> = isRecord(color?.hitsOfColor)
+    ? color.hitsOfColor
+    : isRecord(color?.hintsOfColor)
+      ? color.hintsOfColor
+      : {};
   return {
     ...defaultColorSettings,
     paletteMode:
@@ -247,6 +254,21 @@ const normalizeColor = (
     backgroundColor: asHexColor(color?.backgroundColor, defaultColorSettings.backgroundColor),
     duotoneThreshold: clamp(asNumber(color?.duotoneThreshold, defaultColorSettings.duotoneThreshold), 0, 1),
     customPalette: normalizeCustomPalette(color?.customPalette),
+    hitsOfColor: {
+      enabled: asBoolean(hitsOfColor.enabled, defaultColorSettings.hitsOfColor.enabled),
+      color: asHexColor(hitsOfColor.color, defaultColorSettings.hitsOfColor.color),
+      amount: clamp(asNumber(hitsOfColor.amount, defaultColorSettings.hitsOfColor.amount), 0, 100),
+      seed: Math.trunc(asNumber(hitsOfColor.seed, defaultColorSettings.hitsOfColor.seed)),
+      animated: asBoolean(hitsOfColor.animated, defaultColorSettings.hitsOfColor.animated),
+      animatedHintAmount: clamp(
+        asNumber(
+          hitsOfColor.animatedHintAmount ?? hitsOfColor.animatedAmount,
+          defaultColorSettings.hitsOfColor.animatedHintAmount
+        ),
+        0,
+        100
+      )
+    },
     sourcePaletteOriginal: normalizeSourcePalette(color?.sourcePaletteOriginal ?? sourcePalette),
     sourcePalette,
     sourcePaletteSize: normalizeSourcePaletteSize(color?.sourcePaletteSize),
@@ -359,8 +381,8 @@ const normalizeAscii = (ascii?: Partial<AsciiSettings>): AsciiSettings => {
       Math.abs(asNumber(ascii?.characterScale, defaultAsciiSettings.characterScale) - 0.94) < 0.0001
         ? defaultAsciiSettings.characterScale
         : asNumber(ascii?.characterScale, defaultAsciiSettings.characterScale),
-      0.55,
-      1.35
+      0.25,
+      2
     ),
     spacingX: clamp(asNumber(ascii?.spacingX, defaultAsciiSettings.spacingX), 0.72, 1.8),
     spacingY: clamp(asNumber(ascii?.spacingY, defaultAsciiSettings.spacingY), 0.72, 1.8),
@@ -421,7 +443,7 @@ const normalizeFrame = (frame?: Partial<FrameSettings> & { aspectRatio?: string;
     cropMode: frame?.cropMode === "contain" ? "contain" : "cover",
     customCanvasWidth: Math.round(clamp(customCanvasWidth, 1, 12000)),
     customCanvasHeight: Math.round(clamp(customCanvasHeight, 1, 12000)),
-    imageScale: clamp(imageScale, 10, 150),
+    imageScale: clamp(imageScale, 0, 300),
     imageOffsetX: clamp(imageOffsetX, -100, 100),
     imageOffsetY: clamp(imageOffsetY, -100, 100),
     imageRotation: clamp(imageRotation, -180, 180),
@@ -461,10 +483,12 @@ const normalizeAnimation = (
   animation?: Partial<AnimationSettings> & {
     direction?: string;
     scaleMovement?: string;
+    effectLoopsPerLoop?: unknown;
     matrixLoopStyle?: string;
     matrixTransitionColorEnabled?: unknown;
     matrixTransitionColor?: unknown;
     matrixTransitionAmount?: unknown;
+    spinRotationsPerLoop?: unknown;
     spinDirection?: string;
     ambientDirection?: string;
     echoFadeCurve?: string;
@@ -473,25 +497,34 @@ const normalizeAnimation = (
 ): AnimationSettings => {
   const scaleMin = clamp(asNumber(animation?.scaleMin, defaultAnimationSettings.scaleMin), 5, 100);
   const scaleMax = clamp(asNumber(animation?.scaleMax, defaultAnimationSettings.scaleMax), 10, 200);
+  const type =
+    animation?.type === "fade" ||
+    animation?.type === "scale" ||
+    animation?.type === "matrix" ||
+    animation?.type === "breakup" ||
+    animation?.type === "spin" ||
+    animation?.type === "ambient"
+      ? animation.type
+      : defaultAnimationSettings.type;
 
   return {
     enabled: asBoolean(animation?.enabled, defaultAnimationSettings.enabled),
-    type:
-      animation?.type === "fade" ||
-      animation?.type === "scale" ||
-      animation?.type === "matrix" ||
-      animation?.type === "breakup" ||
-      animation?.type === "spin" ||
-      animation?.type === "ambient"
-        ? animation.type
-        : defaultAnimationSettings.type,
+    type,
     intensity: clamp(asNumber(animation?.intensity, defaultAnimationSettings.intensity), 0, 100),
     strength: clamp(asNumber(animation?.strength, defaultAnimationSettings.strength), 0, 100),
     velocity: clamp(asNumber(animation?.velocity, defaultAnimationSettings.velocity), 0, 400),
-    characterVariation: clamp(asNumber(animation?.characterVariation, defaultAnimationSettings.characterVariation), 0, 100),
+    characterVariation:
+      type === "scale" || type === "matrix"
+        ? 0
+        : clamp(asNumber(animation?.characterVariation, defaultAnimationSettings.characterVariation), 0, 100),
     scaleMin,
     scaleMax: Math.max(scaleMin, scaleMax),
     scaleMovement: animation?.scaleMovement === "constant" ? "constant" : "ease",
+    effectLoopsPerLoop: clamp(
+      asNumber(animation?.effectLoopsPerLoop, defaultAnimationSettings.effectLoopsPerLoop),
+      0.1,
+      10
+    ),
     matrixLoopStyle: animation?.matrixLoopStyle === "continuous" ? "continuous" : "pingpong",
     matrixTransitionColorEnabled: asBoolean(
       animation?.matrixTransitionColorEnabled,
@@ -502,6 +535,11 @@ const normalizeAnimation = (
       asNumber(animation?.matrixTransitionAmount, defaultAnimationSettings.matrixTransitionAmount),
       0,
       100
+    ),
+    spinRotationsPerLoop: clamp(
+      asNumber(animation?.spinRotationsPerLoop, defaultAnimationSettings.spinRotationsPerLoop),
+      0.05,
+      10
     ),
     spinDirection: animation?.spinDirection === "counterclockwise" ? "counterclockwise" : "clockwise",
     ambientDirection:

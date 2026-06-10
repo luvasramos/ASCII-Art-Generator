@@ -345,7 +345,8 @@ export const StudioCanvas = ({
     markRenderedPreviewStale,
     setAnimationPreviewMode,
     setLivePreviewOptimizationLevel,
-    setAnimationPreviewFormat
+    setAnimationPreviewFormat,
+    failRenderedPreviewRender
   } = useStudioStore();
   const canPreviewAnimation = animateStillImageActive && Boolean(animatedImageRenderer) && Boolean(grid);
   const renderedPreviewProgress = Math.min(1, Math.max(0, renderedPreview.progress));
@@ -393,13 +394,15 @@ export const StudioCanvas = ({
     livePreviewPlaying &&
     (!livePreviewStats || livePreviewStats.phase === "optimizing");
   const displayedLivePreviewStats = livePreviewStats;
-  const livePreviewPaused =
-    animateStillImageActive &&
-    (!livePreviewPlaying ||
-      inlineFinalPreviewRendering ||
+  const renderedPreviewBlocksLive =
+    renderedPreview.mode === "rendered" &&
+    (inlineFinalPreviewRendering ||
       inlineFinalPreviewVisible ||
       renderedPreview.status === "stale" ||
       renderedPreview.status === "error");
+  const livePreviewPaused =
+    animateStillImageActive &&
+    (!livePreviewPlaying || renderedPreviewBlocksLive);
   const livePreviewTargetFps = normalizeAnimationFps(animation.fps);
   const livePreviewOptimizationName = livePreviewOptimizationLabel(livePreviewOptimizationLevel);
   const livePreviewLabel = finalQualityStaticPreviewActive
@@ -430,6 +433,10 @@ export const StudioCanvas = ({
         grid,
         livePreviewOptimizationName
       );
+  const finalPreviewErrorMessage =
+    renderedPreview.status === "error"
+      ? renderedPreview.error?.trim() || "Preview failed. Try rendering again or return to live preview."
+      : "";
   const finalPreviewStatusLabel =
     renderedPreview.status === "stale"
       ? "Preview outdated"
@@ -442,7 +449,7 @@ export const StudioCanvas = ({
       : `Final preview | ${renderedPreviewFormatLabel} | ${renderedPreview.fps} fps`;
   const finalPreviewStatusDetail =
     renderedPreview.status === "error"
-      ? "Try rendering again or return to live preview."
+      ? finalPreviewErrorMessage
       : renderedPreview.status === "stale"
       ? "Settings changed. Render again for an exact preview."
       : renderedPreview.status === "rendering"
@@ -483,7 +490,8 @@ export const StudioCanvas = ({
 
   const {
     generate: generateRenderedPreview,
-    cancel: cancelRenderedPreviewRender
+    cancel: cancelRenderedPreviewRender,
+    clear: clearRenderedPreviewCache
   } = useRenderedAnimationPreview({
     sourceKey: mediaKey,
     renderer: animatedImageRenderer,
@@ -511,41 +519,67 @@ export const StudioCanvas = ({
   });
 
   const startRenderedPreview = useCallback(async () => {
+    stopRenderedPreview();
+    cancelRenderedPreviewRender();
+    clearRenderedPreviewCache();
+    setAnimationPreviewMode("rendered");
     if (!canPreviewAnimation) {
+      failRenderedPreviewRender("Preview Animation needs a loaded image with animation enabled.");
+      setLivePreviewPlaying(true);
       return;
     }
-    setAnimationPreviewMode("rendered");
     setLivePreviewPlaying(false);
-    stopRenderedPreview();
-    await waitForBrowserFrame();
-    const cache = await generateRenderedPreview();
-    if (cache) {
+    try {
+      await waitForBrowserFrame();
+      const cache = await generateRenderedPreview();
+      if (!cache) {
+        const previewState = useStudioStore.getState().renderedPreview;
+        if (previewState.mode === "rendered" && previewState.status !== "error" && previewState.status !== "stale") {
+          failRenderedPreviewRender("Preview render did not complete. Try Render Again.");
+        }
+        return;
+      }
       await waitForBrowserFrame();
       playRenderedPreview({ restart: true });
+    } catch (error) {
+      failRenderedPreviewRender(error instanceof Error ? `Preview render failed. ${error.message}` : "Preview render failed.");
     }
   }, [
     canPreviewAnimation,
+    cancelRenderedPreviewRender,
+    clearRenderedPreviewCache,
+    failRenderedPreviewRender,
     generateRenderedPreview,
     playRenderedPreview,
     setAnimationPreviewMode,
+    setLivePreviewPlaying,
     stopRenderedPreview
   ]);
 
-  const backToLivePreview = useCallback(() => {
-    if (renderedPreview.status === "rendering") {
+  const resetFinalPreviewAndReturnToLive = useCallback((clearFinalPreview = false) => {
+    const shouldClearFinalPreview =
+      clearFinalPreview ||
+      renderedPreview.status === "rendering" ||
+      renderedPreview.status === "stale" ||
+      renderedPreview.status === "error";
+    if (shouldClearFinalPreview) {
       cancelRenderedPreviewRender();
+      clearRenderedPreviewCache();
     }
     stopRenderedPreview();
     setAnimationPreviewMode("live");
     setLivePreviewPlaying(true);
-  }, [cancelRenderedPreviewRender, renderedPreview.status, setAnimationPreviewMode, stopRenderedPreview]);
+    setLivePreviewStats(null);
+    setStableLivePreviewStats(null);
+  }, [cancelRenderedPreviewRender, clearRenderedPreviewCache, renderedPreview.status, setAnimationPreviewMode, stopRenderedPreview]);
+
+  const backToLivePreview = useCallback(() => {
+    resetFinalPreviewAndReturnToLive();
+  }, [resetFinalPreviewAndReturnToLive]);
 
   const cancelRenderedPreview = useCallback(() => {
-    cancelRenderedPreviewRender();
-    stopRenderedPreview();
-    setAnimationPreviewMode("live");
-    setLivePreviewPlaying(true);
-  }, [cancelRenderedPreviewRender, setAnimationPreviewMode, stopRenderedPreview]);
+    resetFinalPreviewAndReturnToLive(true);
+  }, [resetFinalPreviewAndReturnToLive]);
 
   const replayRenderedPreview = useCallback(() => {
     setAnimationPreviewMode("rendered");
@@ -789,7 +823,8 @@ export const StudioCanvas = ({
       font,
       ascii,
       color,
-      exportOptions: finalQualityStaticPreviewActive ? exportOptions : undefined
+      exportOptions: finalQualityStaticPreviewActive ? exportOptions : undefined,
+      transitionAccent: animation
     });
     backgroundCanvasRef.current.style.width = `${Math.max(1, Math.round(visibleCanvasWidth))}px`;
     backgroundCanvasRef.current.style.height = `${Math.max(1, Math.round(visibleCanvasHeight))}px`;
@@ -800,6 +835,7 @@ export const StudioCanvas = ({
     ascii,
     atlas,
     color,
+    animation,
     font,
     grid,
     imageGlyphAtlas,
@@ -1105,7 +1141,7 @@ export const StudioCanvas = ({
               transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
               transformOrigin: "0 0",
               willChange: "transform",
-              transition: "transform 140ms ease-out"
+              transition: "none"
             }}
           >
             <canvas
@@ -1113,11 +1149,11 @@ export const StudioCanvas = ({
               className={`absolute inset-0 transition-[filter,opacity] duration-150 ${
                 inlineFinalPreviewActive ? "hidden" : ""
               } ${
-                font.smoothing ? "" : "[image-rendering:pixelated]"
+                font.smoothing && font.antiAlias && color.paletteMode !== "single" ? "" : "[image-rendering:pixelated]"
               }`}
               style={{
-                filter: livePreviewTransitioning ? "blur(1px)" : "none",
-                opacity: livePreviewTransitioning ? 0.76 : 1
+                filter: livePreviewTransitioning && color.paletteMode !== "single" ? "blur(1px)" : "none",
+                opacity: livePreviewTransitioning && color.paletteMode !== "single" ? 0.76 : 1
               }}
             />
             <canvas
@@ -1125,11 +1161,11 @@ export const StudioCanvas = ({
               className={`absolute inset-0 transition-[filter,opacity] duration-150 ${
                 inlineFinalPreviewActive ? "hidden" : ""
               } ${
-                font.smoothing ? "" : "[image-rendering:pixelated]"
+                font.smoothing && font.antiAlias && color.paletteMode !== "single" ? "" : "[image-rendering:pixelated]"
               }`}
               style={{
-                filter: livePreviewTransitioning ? "blur(1px)" : "none",
-                opacity: livePreviewTransitioning ? 0.76 : 1
+                filter: livePreviewTransitioning && color.paletteMode !== "single" ? "blur(1px)" : "none",
+                opacity: livePreviewTransitioning && color.paletteMode !== "single" ? 0.76 : 1
               }}
             />
             <canvas
@@ -1142,7 +1178,7 @@ export const StudioCanvas = ({
               ref={renderedPreviewCanvasRef}
               className={`absolute left-0 top-0 ${
                 inlineFinalPreviewVisible ? "" : "hidden"
-              } ${font.smoothing ? "" : "[image-rendering:pixelated]"}`}
+              } ${font.smoothing && font.antiAlias && color.paletteMode !== "single" ? "" : "[image-rendering:pixelated]"}`}
               style={{
                 width: finalPreviewWidth,
                 height: finalPreviewHeight
@@ -1304,35 +1340,36 @@ export const StudioCanvas = ({
                         setLivePreviewOptimizationLevel(value as LivePreviewOptimizationLevel);
                       }}
                     />
-                  {canPreviewAnimation && (
-                    <>
-                      <Select
-                        label="As"
-                        layout="inline"
-                        className="h-8 rounded-lg border-0 bg-transparent px-1"
-                        triggerClassName="h-7 w-20"
-                        title="Controls final preview cache compatibility and suggested export format. Frames render at final output quality."
-                        value={renderedPreview.previewFormat}
-                        options={animationPreviewFormatOptions}
-                        onChange={(value) => {
-                          setAnimationPreviewFormat(value as AnimationPreviewFormat);
-                        }}
-                      />
-                      <button
-                        type="button"
-                        aria-label="Preview animation"
-                        title="Preview animation"
-                        className="flex h-8 items-center gap-1.5 rounded-lg border border-signal/35 bg-signal/15 px-2 text-xs font-semibold text-signal transition-colors duration-150 hover:border-signal/55 hover:bg-signal/20 disabled:cursor-not-allowed disabled:opacity-45"
-                        disabled={renderedPreview.status === "rendering"}
-                        onClick={() => {
-                          void startRenderedPreview();
-                        }}
-                      >
-                        <Play size={14} />
-                        <span className="hidden sm:inline">Preview</span>
-                      </button>
-                    </>
-                  )}
+                    <Select
+                      label="As"
+                      layout="inline"
+                      className="h-8 rounded-lg border-0 bg-transparent px-1"
+                      triggerClassName="h-7 w-20"
+                      title="Controls final preview cache compatibility and suggested export format. Frames render at final output quality."
+                      value={renderedPreview.previewFormat}
+                      options={animationPreviewFormatOptions}
+                      onChange={(value) => {
+                        clearRenderedPreviewCache();
+                        setAnimationPreviewFormat(value as AnimationPreviewFormat);
+                      }}
+                    />
+                    <button
+                      type="button"
+                      aria-label="Preview animation"
+                      title={
+                        canPreviewAnimation
+                          ? "Preview animation"
+                          : "Preview Animation needs a loaded image with animation enabled."
+                      }
+                      className="flex h-8 items-center gap-1.5 rounded-lg border border-signal/35 bg-signal/15 px-2 text-xs font-semibold text-signal transition-colors duration-150 hover:border-signal/55 hover:bg-signal/20 disabled:cursor-not-allowed disabled:opacity-45"
+                      disabled={renderedPreview.status === "rendering"}
+                      onClick={() => {
+                        void startRenderedPreview();
+                      }}
+                    >
+                      <Play size={14} />
+                      <span className="hidden sm:inline">Preview</span>
+                    </button>
                   </div>
                 </>
               )}

@@ -14,6 +14,7 @@ import {
   pushEchoFrame,
   resetEchoFrameHistory
 } from "../renderer/echoComposite";
+import { forceStrictDuotoneCanvas, shouldForceStrictDuotonePixels } from "../renderer/strictDuotone";
 import { renderAsciiLayers } from "../renderer/layeredCanvasRenderer";
 import type {
   AnimationSettings,
@@ -127,7 +128,8 @@ export async function* renderAsciiAnimationFrames({
         : null,
       ascii.glyphMode
     ),
-    ascii.renderResolution
+    ascii.renderResolution,
+    ascii.glyphMode
   );
   const baseOptions = {
     columns: geometry.columns,
@@ -180,6 +182,7 @@ export async function* renderAsciiAnimationFrames({
   if (!outputCtx) {
     throw new Error("Canvas2D is unavailable for animation export.");
   }
+  const strictDuotonePixelGuard = shouldForceStrictDuotonePixels({ color, animation, font });
 
   const renderFrame = (frameData: ImageData, timestamp: number) => {
     const animatedSettings = resolveAnimatedProcessingSettings(image, frame, breakup, animation, timestamp);
@@ -212,13 +215,17 @@ export async function* renderAsciiAnimationFrames({
         targetCanvas: echoGlyphCanvas,
         currentLayerCanvas: glyphCanvas,
         history: echoHistory,
-        animation
+        animation,
+        binaryAlpha: color.paletteMode === "single"
       });
       outputCtx.drawImage(echoGlyphCanvas, 0, 0);
       pushEchoFrame(echoHistory, glyphCanvas, animation);
     } else {
       resetEchoFrameHistory(echoHistory);
       outputCtx.drawImage(glyphCanvas, 0, 0);
+    }
+    if (strictDuotonePixelGuard) {
+      forceStrictDuotoneCanvas(outputCanvas, color, exportOptions);
     }
   };
 
