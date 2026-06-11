@@ -97,6 +97,8 @@ export interface ImageSettings {
   brightness: number;
   contrast: number;
   exposure: number;
+  saturation: number;
+  hue: number;
   shadows: number;
   shadowsRange: number;
   midtones: number;
@@ -111,6 +113,18 @@ export interface ImageSettings {
   whitePoint: number;
   invertColors: boolean;
   invertTone: boolean;
+}
+
+export interface SourceToneSettings {
+  contrast: number;
+  saturation: number;
+  hue: number;
+  shadows: number;
+  shadowsRange: number;
+  midtones: number;
+  midtonesRange: number;
+  highlights: number;
+  highlightsRange: number;
 }
 
 export interface FrameSettings {
@@ -204,6 +218,36 @@ export interface ExportOptions {
   animatedExportQuality: AnimatedExportQuality;
 }
 
+export interface MaskSettings {
+  enabled: boolean;
+  mix: number;
+  cloudSize: number;
+  softness: number;
+  contrast: number;
+  invert: boolean;
+  seed: number;
+}
+
+export type SourceRevealMaskMode = "cellSource" | "fullSource";
+
+export interface SourceSamplingFrame {
+  cropMode: CropMode;
+  sourceX: number;
+  sourceY: number;
+  sourceWidth: number;
+  sourceHeight: number;
+  fitX: number;
+  fitY: number;
+  fitWidth: number;
+  fitHeight: number;
+  rotationRadians: number;
+}
+
+export interface SourceLayerData {
+  imageData: ImageData;
+  samplingFrame: SourceSamplingFrame;
+}
+
 export type MediaKind = "image" | "video";
 
 export interface LoadedVideoSource {
@@ -220,6 +264,7 @@ export interface VideoPlaybackState {
   isPlaying: boolean;
   currentTime: number;
   duration: number;
+  environmentWarning?: string | null;
 }
 
 export interface ColorSettings {
@@ -264,6 +309,7 @@ export interface StudioSettingsSnapshot {
   frame: FrameSettings;
   breakup: BreakupSettings;
   animation: AnimationSettings;
+  mask: MaskSettings;
   color: ColorSettings;
   exportOptions: ExportOptions;
   exportScale: number;
@@ -292,6 +338,9 @@ export interface CellMetrics {
   sourceR: number;
   sourceG: number;
   sourceB: number;
+  sourceInverted: boolean;
+  sourceExposure: number;
+  sourceTone: SourceToneSettings;
   alpha: number;
   coverage: number;
   localContrast: number;
@@ -322,6 +371,7 @@ export interface RenderGrid {
   height: number;
   sourceWidth: number;
   sourceHeight: number;
+  sourceLayer?: SourceLayerData;
   computedAt: number;
 }
 
@@ -347,6 +397,7 @@ export interface WorkerRenderOptions {
   ascii: AsciiSettings;
   color: ColorSettings;
   glyphMetrics: GlyphMetric[];
+  includeSourceLayer?: boolean;
   toneProfile?: {
     low: number;
     high: number;

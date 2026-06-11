@@ -22,6 +22,7 @@ import {
   resetEchoFrameHistory
 } from "./echoComposite";
 import { renderAsciiLayers } from "./layeredCanvasRenderer";
+import { isSourceRevealMaskActive } from "./sourceRevealMask";
 import type {
   AnimationSettings,
   AsciiSettings,
@@ -32,6 +33,7 @@ import type {
   GlyphMetric,
   ImageSettings,
   LivePreviewOptimizationLevel,
+  MaskSettings,
   RenderGrid,
   WorkerRenderOptions
 } from "./types";
@@ -75,6 +77,7 @@ interface AnimatedAsciiPreviewArgs {
   frame: FrameSettings;
   breakup: BreakupSettings;
   color: ColorSettings;
+  mask: MaskSettings;
   animation: AnimationSettings;
   optimizationLevel?: LivePreviewOptimizationLevel;
   glyphMetrics: GlyphMetric[];
@@ -308,6 +311,7 @@ const createPreviewVisualKey = (
   frame: FrameSettings,
   breakup: BreakupSettings,
   color: ColorSettings,
+  mask: MaskSettings,
   animation: AnimationSettings
 ) =>
   JSON.stringify({
@@ -323,9 +327,16 @@ const createPreviewVisualKey = (
     image,
     frame,
     breakup,
-    color,
+    color: getRenderRelevantColorSettings(color),
+    mask,
     animation
   });
+
+const getRenderRelevantColorSettings = (color: ColorSettings) => {
+  const { duotoneThreshold, ...renderColor } = color;
+  void duotoneThreshold;
+  return renderColor;
+};
 
 const createInitialScaleState = (resetKey = "", now = 0): LivePreviewScaleState => ({
   resetKey,
@@ -808,6 +819,14 @@ const copyPreviewCanvasFrame = (
   context.drawImage(sourceCanvas, 0, 0, width, height);
 };
 
+const clearPreviewCanvasFrame = (canvas: HTMLCanvasElement) => {
+  const context = canvas.getContext("2d", { alpha: true });
+  if (!context) {
+    return;
+  }
+  context.clearRect(0, 0, canvas.width, canvas.height);
+};
+
 export const useAnimatedAsciiPreview = ({
   active,
   paused = false,
@@ -825,6 +844,7 @@ export const useAnimatedAsciiPreview = ({
   frame,
   breakup,
   color,
+  mask,
   animation,
   optimizationLevel = "balanced",
   glyphMetrics,
@@ -844,6 +864,7 @@ export const useAnimatedAsciiPreview = ({
     frame,
     breakup,
     color,
+    mask,
     animation,
     optimizationLevel: livePreviewOptimizationLevel,
     glyphMetrics,
@@ -896,6 +917,7 @@ export const useAnimatedAsciiPreview = ({
       frame,
       breakup,
       color,
+      mask,
       animation,
       optimizationLevel: livePreviewOptimizationLevel,
       glyphMetrics,
@@ -914,6 +936,7 @@ export const useAnimatedAsciiPreview = ({
     frame,
     breakup,
     color,
+    mask,
     animation,
     livePreviewOptimizationLevel,
     glyphMetrics,
@@ -1136,17 +1159,21 @@ export const useAnimatedAsciiPreview = ({
           latest.frame,
           latest.breakup,
           latest.color,
+          latest.mask,
           latest.animation
         );
         if (visualKeyRef.current !== visualKey) {
           const hadVisualKey = Boolean(visualKeyRef.current);
           visualKeyRef.current = visualKey;
+          frameCacheRef.current.clear();
           scaleStateRef.current.lastSettingsChangedAt = now;
           scaleStateRef.current.slowWindows = 0;
           scaleStateRef.current.healthyWindows = 0;
           if (hadVisualKey) {
             scaleStateRef.current.transitionUntil = now + LIVE_PREVIEW_EDIT_SETTLE_MS;
             scaleStateRef.current.transitionReason = "updating";
+            clearPreviewCanvasFrame(backgroundCanvas);
+            clearPreviewCanvasFrame(glyphCanvas);
           }
           lastRenderedPreviewFrameIndex = -1;
           displayReadyRef.current = false;
@@ -1289,7 +1316,8 @@ export const useAnimatedAsciiPreview = ({
             gapY: scaledGapY,
             ascii: latest.ascii,
             color: latest.color,
-            glyphMetrics: latest.glyphMetrics
+            glyphMetrics: latest.glyphMetrics,
+            includeSourceLayer: isSourceRevealMaskActive(latest.mask)
           };
           const options: WorkerRenderOptions = {
             ...baseOptions,
@@ -1330,6 +1358,7 @@ export const useAnimatedAsciiPreview = ({
             font: latest.font,
             ascii: latest.ascii,
             color: latest.color,
+            mask: latest.mask,
             animation: latest.animation,
             animationTimeSeconds: timeSeconds,
             glyphMetrics: latest.glyphMetrics

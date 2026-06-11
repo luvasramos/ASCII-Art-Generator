@@ -251,7 +251,7 @@ export const Slider = ({
 interface SelectProps {
   label: string;
   value: string;
-  options: { label: string; value: string }[];
+  options: { label: string; value: string; icon?: ReactNode }[];
   disabled?: boolean;
   layout?: "stacked" | "inline";
   className?: string;
@@ -390,7 +390,10 @@ const CustomSelect = ({
         onClick={() => setOpen((value) => !value)}
         onKeyDown={handleKeyDown}
       >
-        <span className="min-w-0 truncate">{selected?.label ?? "Select"}</span>
+        <span className="flex min-w-0 items-center gap-2">
+          {selected?.icon && <span className="grid h-4 w-4 shrink-0 place-items-center text-zinc-500">{selected.icon}</span>}
+          <span className="min-w-0 truncate">{selected?.label ?? "Select"}</span>
+        </span>
         <ChevronDown
           size={16}
           className={`shrink-0 text-zinc-500 transition ${open ? "rotate-180 text-signal" : ""}`}
@@ -422,7 +425,10 @@ const CustomSelect = ({
                 onMouseEnter={() => setActiveIndex(index)}
                 onClick={() => choose(option.value)}
               >
-                <span className="min-w-0 truncate">{option.label}</span>
+                <span className="flex min-w-0 items-center gap-2">
+                  {option.icon && <span className="grid h-4 w-4 shrink-0 place-items-center text-zinc-500">{option.icon}</span>}
+                  <span className="min-w-0 truncate">{option.label}</span>
+                </span>
                 {selectedOption && <Check size={14} className="shrink-0 text-signal" />}
               </button>
             );

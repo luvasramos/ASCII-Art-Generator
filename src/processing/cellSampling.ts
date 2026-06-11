@@ -1,5 +1,14 @@
-import type { CellMetrics, CropMode, FrameSettings, GlyphMetric, WorkerRenderOptions } from "../renderer/types";
+import type {
+  CellMetrics,
+  CropMode,
+  FrameSettings,
+  GlyphMetric,
+  SourceSamplingFrame,
+  SourceToneSettings,
+  WorkerRenderOptions
+} from "../renderer/types";
 import type { EdgeMaps } from "../edges/sobel";
+import { defaultSourceToneSettings } from "./sourcePixels";
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
 const mix = (a: number, b: number, amount: number) => a + (b - a) * amount;
@@ -14,18 +23,7 @@ export interface ToneMappingProfile {
   high: number;
 }
 
-export interface SamplingFrame {
-  cropMode: CropMode;
-  sourceX: number;
-  sourceY: number;
-  sourceWidth: number;
-  sourceHeight: number;
-  fitX: number;
-  fitY: number;
-  fitWidth: number;
-  fitHeight: number;
-  rotationRadians: number;
-}
+export type SamplingFrame = SourceSamplingFrame;
 
 type SamplingFrameBase = Omit<SamplingFrame, "rotationRadians">;
 
@@ -49,32 +47,27 @@ const percentileFromHistogram = (histogram: Uint32Array, total: number, percenti
   return 1;
 };
 
-const mapSourceLuminanceForTone = (luminance: number, options: WorkerRenderOptions) => {
-  const sourceLuminance = clamp01(luminance);
-  return options.image.invertTone ? 1 - sourceLuminance : sourceLuminance;
-};
+const mapSourceLuminanceForTone = (luminance: number) => clamp01(luminance);
 
-const getTonalLuminance = (
+const getToneMappedLuminance = (
   metrics: CellMetrics,
-  options: WorkerRenderOptions,
   toneProfile?: ToneMappingProfile | null
 ) => {
-  let luminance = mapSourceLuminanceForTone(metrics.luminance, options);
+  let luminance = mapSourceLuminanceForTone(metrics.luminance);
 
   if (toneProfile) {
     const stretched = clamp01((luminance - toneProfile.low) / Math.max(0.001, toneProfile.high - toneProfile.low));
     luminance = mix(luminance, stretched, 0.72);
   }
 
-  if (options.color.paletteMode === "single") {
-    const threshold = clamp01(options.color.duotoneThreshold ?? 0.5);
-    luminance =
-      luminance < threshold
-        ? 0.5 * (luminance / Math.max(0.001, threshold))
-        : 0.5 + 0.5 * ((luminance - threshold) / Math.max(0.001, 1 - threshold));
-  }
-
   return clamp01(luminance);
+};
+
+const getGlyphLuminance = (
+  metrics: CellMetrics,
+  toneProfile?: ToneMappingProfile | null
+) => {
+  return clamp01(getToneMappedLuminance(metrics, toneProfile));
 };
 
 export const buildToneMappingProfile = (
@@ -88,7 +81,7 @@ export const buildToneMappingProfile = (
     if (cell.alpha <= 0.01 || cell.coverage <= 0.01) {
       continue;
     }
-    const luminance = mapSourceLuminanceForTone(cell.luminance, options);
+    const luminance = mapSourceLuminanceForTone(cell.luminance);
     histogram[Math.round(clamp01(luminance) * 255)] += 1;
     total += 1;
   }
@@ -133,10 +126,6 @@ const applyToneRandomness = (
 export const shouldSuppressGlyphForBlackCell = (metrics: CellMetrics, options: WorkerRenderOptions) => {
   if (metrics.alpha <= 0.01) {
     return true;
-  }
-
-  if (options.image.invertTone) {
-    return false;
   }
 
   const foregroundOnlyDuotone =
@@ -241,13 +230,22 @@ export const createSamplingFrame = (
   });
 };
 
-const emptyMetrics = (cellX: number, cellY: number): CellMetrics => ({
+const emptyMetrics = (
+  cellX: number,
+  cellY: number,
+  sourceInverted = false,
+  sourceExposure = 0,
+  sourceTone: SourceToneSettings = defaultSourceToneSettings
+): CellMetrics => ({
   x: cellX,
   y: cellY,
   luminance: 0,
   sourceR: 0,
   sourceG: 0,
   sourceB: 0,
+  sourceInverted,
+  sourceExposure,
+  sourceTone,
   alpha: 0,
   coverage: 0,
   localContrast: 0,
@@ -268,7 +266,10 @@ export const sampleCellMetrics = (
   rows: number,
   cellX: number,
   cellY: number,
-  frame: SamplingFrame
+  frame: SamplingFrame,
+  sourceInverted = false,
+  sourceExposure = 0,
+  sourceTone: SourceToneSettings = defaultSourceToneSettings
 ): CellMetrics => {
   let u0 = cellX / columns;
   let u1 = (cellX + 1) / columns;
@@ -283,7 +284,7 @@ export const sampleCellMetrics = (
   const overlapV1 = Math.min(v1, fitBottom);
 
   if (overlapU0 >= overlapU1 || overlapV0 >= overlapV1) {
-    return emptyMetrics(cellX, cellY);
+    return emptyMetrics(cellX, cellY, sourceInverted, sourceExposure, sourceTone);
   }
 
   u0 = (overlapU0 - frame.fitX) / Math.max(0.001, frame.fitWidth);
@@ -309,7 +310,7 @@ export const sampleCellMetrics = (
     const nextV0 = Math.min(...corners.map(([, v]) => v));
     const nextV1 = Math.max(...corners.map(([, v]) => v));
     if (nextU1 <= 0 || nextU0 >= 1 || nextV1 <= 0 || nextV0 >= 1) {
-      return emptyMetrics(cellX, cellY);
+      return emptyMetrics(cellX, cellY, sourceInverted, sourceExposure, sourceTone);
     }
     u0 = clamp01(nextU0);
     u1 = clamp01(nextU1);
@@ -381,6 +382,9 @@ export const sampleCellMetrics = (
     sourceR: sourceWeight > 0 ? sourceR / safeSourceWeight : 0,
     sourceG: sourceWeight > 0 ? sourceG / safeSourceWeight : 0,
     sourceB: sourceWeight > 0 ? sourceB / safeSourceWeight : 0,
+    sourceInverted,
+    sourceExposure,
+    sourceTone,
     alpha: alphaSum / Math.max(1, count),
     coverage: coverageSum / Math.max(1, count),
     localContrast: max - min,
@@ -413,14 +417,12 @@ export const selectGlyph = (metrics: CellMetrics, glyphs: GlyphMetric[], options
     return " ";
   }
 
-  const tonalLuminance = getTonalLuminance(metrics, options, options.toneProfile);
+  const tonalLuminance = getGlyphLuminance(metrics, options.toneProfile);
   const tone = Math.pow(tonalLuminance, Math.max(0.15, options.ascii.luminanceCurve));
   const flatPenalty =
     metrics.edgeMagnitude < 0.055 && metrics.localContrast < 0.1 ? 0.2 + (0.1 - metrics.localContrast) : 0;
-  const foregroundOnlyDuotone =
-    options.color.paletteMode === "single" && options.ascii.backgroundOpacity <= 0.001;
   const densityTone =
-    options.ascii.glyphMode === "characters" && !foregroundOnlyDuotone && !options.image.invertTone
+    options.ascii.glyphMode === "characters"
       ? 1 - tone
       : tone;
   const densityBias = (options.ascii.characterDensity - 0.82) * 0.055;
@@ -483,7 +485,7 @@ export const selectGlyph = (metrics: CellMetrics, glyphs: GlyphMetric[], options
 };
 
 export const computeLayerBrightness = (metrics: CellMetrics, options: WorkerRenderOptions) => {
-  const lum = getTonalLuminance(metrics, options, options.toneProfile);
+  const lum = getGlyphLuminance(metrics, options.toneProfile);
   const edgeSignal = clamp01(
     metrics.edgeMagnitude * options.ascii.edgeEmphasis +
       metrics.localContrast * 0.42 +

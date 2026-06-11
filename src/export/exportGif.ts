@@ -8,7 +8,8 @@ import type {
   FontSettings,
   FrameSettings,
   GlyphMetric,
-  ImageSettings
+  ImageSettings,
+  MaskSettings
 } from "../renderer/types";
 import type {
   RenderedPreviewCache,
@@ -21,10 +22,13 @@ import {
   forceStrictDuotoneCanvas,
   hintsOfColorCanRender,
   matrixTransitionColorCanRender,
+  matrixTransitionColorCanRenderForColor,
   shouldForceStrictDuotonePixels
 } from "../renderer/strictDuotone";
 import { cachedAnimationFrameMatches, renderCachedAnimationFrames } from "./cachedAnimationFrames";
 import { renderAsciiAnimationFrames } from "./renderAnimationFrames";
+import { applyImageSourceRgbProcessing } from "../processing/sourcePixels";
+import { isSourceRevealMaskActive } from "../renderer/sourceRevealMask";
 
 interface ExportAsciiGifArgs {
   sourceName: string;
@@ -35,6 +39,7 @@ interface ExportAsciiGifArgs {
   frame: FrameSettings;
   breakup: BreakupSettings;
   color: ColorSettings;
+  mask: MaskSettings;
   exportOptions: ExportOptions;
   exportScale: number;
   glyphMetrics: GlyphMetric[];
@@ -213,10 +218,20 @@ const seedMatrixTransitionPalette = (palette: RgbColor[], transitionStops: RgbCo
   return first ? [first, ...transitionStops, ...rest] : transitionStops;
 };
 
+const seedHintAccentPalette = (palette: RgbColor[], hintAccent: RgbColor | null) => {
+  if (!hintAccent) {
+    return palette;
+  }
+  const [first, ...rest] = palette;
+  return first ? [first, hintAccent, ...rest] : [hintAccent];
+};
+
 const buildPalette = (
   color: ColorSettings,
+  image: ImageSettings,
   exportOptions: ExportOptions,
   quality: AnimatedExportQuality,
+  mask?: MaskSettings,
   animation?: AnimationSettings
 ) => {
   const profile = resolveAnimatedExportProfile(quality, animation?.type);
@@ -227,12 +242,8 @@ const buildPalette = (
   const foreground = hexToRgb(color.foregroundColor) ?? { r: 255, g: 255, b: 255 };
   const mode = color.paletteMode as string;
   const strictDuotoneMode = mode === "single" || mode === "duotone";
-  const duotoneHitAccent =
-    strictDuotoneMode &&
-    hintsOfColorCanRender(color, animation)
-      ? hexToRgb(color.hitsOfColor.color)
-      : null;
-  const duotoneTransitionActive = matrixTransitionColorCanRender(animation);
+  const hintAccent = hintsOfColorCanRender(color, animation) ? hexToRgb(color.hitsOfColor.color) : null;
+  const duotoneTransitionActive = matrixTransitionColorCanRenderForColor(animation, color);
   const duotoneTransitionAccent =
     strictDuotoneMode && duotoneTransitionActive && animation
       ? hexToRgb(animation.matrixTransitionColor)
@@ -241,19 +252,21 @@ const buildPalette = (
     ? duotoneTransitionAccent
       ? [duotoneTransitionAccent]
       : []
-    : buildMatrixTransitionPaletteStops(animation, background, foreground);
+    : duotoneTransitionActive
+      ? buildMatrixTransitionPaletteStops(animation, background, foreground)
+      : [];
   let palette: RgbColor[];
 
   if (strictDuotoneMode) {
     palette = [
       duotoneBackground,
       foreground,
-      ...(duotoneHitAccent ? [duotoneHitAccent] : []),
       ...(duotoneTransitionAccent ? [duotoneTransitionAccent] : [])
     ].slice(0, usableColors);
   } else if (mode === "source" && color.sourceColorMapping === "source-match") {
     const stops = (color.sourcePalette.length ? color.sourcePalette : [color.backgroundColor, color.foregroundColor])
       .map(hexToRgb)
+      .map((entry) => (entry ? applyImageSourceRgbProcessing(entry, image) : entry))
       .filter((entry): entry is RgbColor => Boolean(entry));
     const backgroundStops = color.sourceMatchBackground === "cell-background" ? stops : [];
     palette = [background, ...backgroundStops, ...(stops.length ? stops : [foreground])].slice(0, usableColors);
@@ -261,6 +274,7 @@ const buildPalette = (
     const paletteSource = mode === "source" ? color.sourcePalette : color.customPalette;
     const stops = (paletteSource.length ? paletteSource : [color.backgroundColor, color.foregroundColor])
       .map(hexToRgb)
+      .map((entry) => (mode === "source" && entry ? applyImageSourceRgbProcessing(entry, image) : entry))
       .filter((entry): entry is RgbColor => Boolean(entry));
     const safeStops = stops.length ? stops : [background, foreground];
     const count = Math.max(2, Math.min(usableColors, Math.max(safeStops.length, Math.min(profile.paletteSize, usableColors))));
@@ -273,8 +287,16 @@ const buildPalette = (
     });
   }
 
-  palette = seedMatrixTransitionPalette(palette, matrixTransitionStops);
-  const activePalette = dedupePalette(color.invert ? palette.map(invertRgb) : palette).slice(0, usableColors);
+  const matrixPalette = seedMatrixTransitionPalette(palette, matrixTransitionStops);
+  const displayPalette = color.invert ? matrixPalette.map(invertRgb) : matrixPalette;
+  const sourceRevealPalette =
+    isSourceRevealMaskActive(mask)
+      ? color.sourcePalette
+          .map(hexToRgb)
+          .map((entry) => (entry ? applyImageSourceRgbProcessing(entry, image) : entry))
+          .filter((entry): entry is RgbColor => Boolean(entry))
+      : [];
+  const activePalette = dedupePalette(seedHintAccentPalette([...displayPalette, ...sourceRevealPalette], hintAccent)).slice(0, usableColors);
   return transparent ? [{ r: 0, g: 0, b: 0 }, ...activePalette] : activePalette;
 };
 
@@ -769,6 +791,7 @@ export const exportAsciiGif = async ({
   frame,
   breakup,
   color,
+  mask,
   exportOptions,
   exportScale,
   glyphMetrics,
@@ -784,11 +807,11 @@ export const exportAsciiGif = async ({
   const exportQuality = quality ?? exportOptions.animatedExportQuality;
   const normalizedFps = resolveAnimatedExportFps(fps, exportQuality, animation?.type);
   const totalFrames = resolveAnimationFrameCount(duration, normalizedFps);
-  const palette = buildPalette(color, exportOptions, exportQuality, animation);
+  const palette = buildPalette(color, image, exportOptions, exportQuality, mask, animation);
   const transparentIndex = exportOptions.transparentBackground ? 0 : null;
   const alphaThreshold = (exportOptions.alphaThreshold / 100) * 255;
   const useCachedFrames = cachedAnimationFrameMatches(cachedFrames, normalizedFps, totalFrames);
-  const strictDuotonePixelGuard = shouldForceStrictDuotonePixels({ color, animation, font });
+  const strictDuotonePixelGuard = !isSourceRevealMaskActive(mask) && shouldForceStrictDuotonePixels({ color, animation, font });
 
   const encode = async (mode: "optimized" | "safe") => {
     const quantizer = new PaletteQuantizer(palette, transparentIndex);
@@ -817,6 +840,7 @@ export const exportAsciiGif = async ({
           frame,
           breakup,
           color,
+          mask,
           exportOptions,
           exportScale,
           glyphMetrics,

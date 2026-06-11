@@ -16,6 +16,7 @@ import {
 } from "../renderer/echoComposite";
 import { forceStrictDuotoneCanvas, shouldForceStrictDuotonePixels } from "../renderer/strictDuotone";
 import { renderAsciiLayers } from "../renderer/layeredCanvasRenderer";
+import { isSourceRevealMaskActive } from "../renderer/sourceRevealMask";
 import type {
   AnimationSettings,
   AsciiSettings,
@@ -26,6 +27,7 @@ import type {
   FrameSettings,
   GlyphMetric,
   ImageSettings,
+  MaskSettings,
   WorkerRenderOptions
 } from "../renderer/types";
 
@@ -45,6 +47,7 @@ export interface RenderAsciiAnimationFramesOptions {
   image: ImageSettings;
   frame: FrameSettings;
   breakup: BreakupSettings;
+  mask: MaskSettings;
   color: ColorSettings;
   exportOptions: ExportOptions;
   exportScale: number;
@@ -90,6 +93,7 @@ export async function* renderAsciiAnimationFrames({
   image,
   frame,
   breakup,
+  mask,
   color,
   exportOptions,
   exportScale,
@@ -140,7 +144,8 @@ export async function* renderAsciiAnimationFrames({
     gapY: geometry.gapY,
     ascii,
     color,
-    glyphMetrics
+    glyphMetrics,
+    includeSourceLayer: isSourceRevealMaskActive(mask)
   };
 
   const firstSettings = resolveAnimatedProcessingSettings(image, frame, breakup, animation, 0);
@@ -182,7 +187,7 @@ export async function* renderAsciiAnimationFrames({
   if (!outputCtx) {
     throw new Error("Canvas2D is unavailable for animation export.");
   }
-  const strictDuotonePixelGuard = shouldForceStrictDuotonePixels({ color, animation, font });
+  const strictDuotonePixelGuard = !isSourceRevealMaskActive(mask) && shouldForceStrictDuotonePixels({ color, animation, font });
 
   const renderFrame = (frameData: ImageData, timestamp: number) => {
     const animatedSettings = resolveAnimatedProcessingSettings(image, frame, breakup, animation, timestamp);
@@ -201,6 +206,7 @@ export async function* renderAsciiAnimationFrames({
       imageGlyphAtlas,
       font: exportFont,
       ascii,
+      mask,
       color,
       exportOptions: renderLikePreview ? undefined : exportOptions,
       animation,

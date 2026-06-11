@@ -1,5 +1,5 @@
 import { computeSobel } from "../edges/sobel";
-import { applyBlurAndSharpen, buildLuminanceMap } from "../luminance/adjustments";
+import { buildLuminanceMap } from "../luminance/adjustments";
 import {
   buildToneMappingProfile,
   computeLayerBrightness,
@@ -10,15 +10,29 @@ import {
 } from "./cellSampling";
 import { applyEdgeBreakup } from "./edgeBreakup";
 import { buildSubjectMaps } from "./subjectMask";
+import {
+  applySourceColorPixelProcessing,
+  applySourcePixelProcessing,
+  resolveSourceExposure,
+  resolveSourceToneSettings
+} from "./sourcePixels";
 import { getTargetAspectRatio } from "../presets/aspectRatios";
 import type { CellMetrics, CellRenderData, RenderGrid, WorkerRenderOptions } from "../renderer/types";
 
 export const generateRenderGrid = (imageData: ImageData, options: WorkerRenderOptions): RenderGrid => {
-  const width = imageData.width;
-  const height = imageData.height;
-  const luminanceBase = buildLuminanceMap(imageData, options.image);
-  const luminance = applyBlurAndSharpen(luminanceBase, width, height, options.image);
-  const subjectMaps = buildSubjectMaps(imageData, luminance);
+  const sourceImageData = applySourcePixelProcessing(imageData, options.image);
+  const shouldUseAdjustedSourceColors =
+    options.includeSourceLayer ||
+    options.color.paletteMode === "source";
+  const sourceColorImageData = shouldUseAdjustedSourceColors
+    ? applySourceColorPixelProcessing(imageData, options.image)
+    : sourceImageData;
+  const sourceExposure = resolveSourceExposure(options.image);
+  const sourceTone = resolveSourceToneSettings(options.image);
+  const width = sourceImageData.width;
+  const height = sourceImageData.height;
+  const luminance = buildLuminanceMap(sourceImageData, options.image);
+  const subjectMaps = buildSubjectMaps(sourceImageData, luminance);
   const edges = computeSobel(luminance, width, height);
   const targetAspectRatio = getTargetAspectRatio(
     options.frame.aspectRatio,
@@ -36,7 +50,7 @@ export const generateRenderGrid = (imageData: ImageData, options: WorkerRenderOp
       sampledMetrics.push(
         sampleCellMetrics(
           luminance,
-          imageData.data,
+          sourceColorImageData.data,
           edges,
           width,
           height,
@@ -46,7 +60,10 @@ export const generateRenderGrid = (imageData: ImageData, options: WorkerRenderOp
           options.rows,
           x,
           y,
-          samplingFrame
+          samplingFrame,
+          options.image.invertTone,
+          sourceExposure,
+          sourceTone
         )
       );
     }
@@ -95,6 +112,12 @@ export const generateRenderGrid = (imageData: ImageData, options: WorkerRenderOp
     height: options.rows * options.cellHeight + Math.max(0, options.rows - 1) * options.gapY,
     sourceWidth: width,
     sourceHeight: height,
+    sourceLayer: options.includeSourceLayer
+      ? {
+          imageData: sourceColorImageData,
+          samplingFrame
+        }
+      : undefined,
     computedAt: performance.now()
   };
 };

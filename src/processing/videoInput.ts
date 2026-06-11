@@ -16,7 +16,7 @@ const waitForVideoEvent = (video: HTMLVideoElement, eventName: keyof HTMLMediaEl
     };
     const handleError = () => {
       cleanup();
-      reject(new Error("This browser could not decode the video. Try MP4/H.264 or WebM."));
+      reject(new Error("This browser could not decode this video. Try MP4/H.264 or WebM."));
     };
     video.addEventListener(eventName, handleEvent, { once: true });
     video.addEventListener("error", handleError, { once: true });

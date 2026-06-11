@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "tsc && vite build && node scripts/build-standalone.mjs",
-    "build:pages": "npm run build && xcopy dist docs /E /Y",
+    "build:pages": "npm run build && node scripts/copy-dist-to-docs.mjs",
     "deploy:pages": "npm run build:pages",
     "preview": "vite preview --host 0.0.0.0"
   },

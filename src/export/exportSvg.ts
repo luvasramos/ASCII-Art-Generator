@@ -4,11 +4,11 @@ import { resolveCellFittedFontSize } from "../atlas/glyphAtlas";
 import { normalizeCharacterSet } from "../ascii/charset";
 import { createImageGlyphBrightnessMapper } from "../renderer/imageGlyphDistribution";
 import {
-  resolveDuotoneHitsOfColor,
+  resolveHintsOfColor,
   resolveDuotoneTransitionColor,
-  shouldUseStaticDuotoneHitColor
+  shouldUseHintColor
 } from "../renderer/duotoneTransitionAccent";
-import { matrixTransitionColorCanRender } from "../renderer/strictDuotone";
+import { matrixTransitionColorCanRenderForColor } from "../renderer/strictDuotone";
 import type { AnimationSettings, AsciiSettings, ColorSettings, ExportOptions, FontSettings, RenderGrid } from "../renderer/types";
 import { downloadBlob } from "./download";
 import { scaleFontForRenderResolution } from "../renderer/geometry";
@@ -78,16 +78,23 @@ export const exportSvg = ({ grid, font, ascii, color, animation, exportOptions, 
     return imageGlyphs[Math.min(imageGlyphs.length - 1, Math.max(0, index))] ?? null;
   };
   const resolveGlyphFill = (cell: RenderGrid["cells"][number]) => {
+    if (shouldUseHintColor(cell, color, ascii, animation)) {
+      return resolveHintsOfColor(color);
+    }
+    if (duotoneMode && animation && matrixTransitionColorCanRenderForColor(animation, color) && (cell.matrixTransition ?? 0) > 0) {
+      return resolveDuotoneTransitionColor(animation, color);
+    }
     if (sourceMatchMode) {
       return resolveDisplaySourceMatchColor(cell, color);
     }
-    if (duotoneMode && animation && matrixTransitionColorCanRender(animation) && (cell.matrixTransition ?? 0) > 0) {
-      return resolveDuotoneTransitionColor(animation, color);
-    }
-    if (duotoneMode && shouldUseStaticDuotoneHitColor(cell, color, ascii)) {
-      return resolveDuotoneHitsOfColor(color);
-    }
-    return resolveDisplayCellColor(quantizeBrightness(cell.foreground), color, "foreground");
+    return resolveDisplayCellColor(
+      quantizeBrightness(cell.foreground),
+      color,
+      "foreground",
+      cell.sourceInverted,
+      cell.sourceExposure,
+      cell.sourceTone
+    );
   };
   const imageTintFilters = new Map<string, string>();
   const imageTintFilterDefs: string[] = [];
@@ -123,7 +130,14 @@ export const exportSvg = ({ grid, font, ascii, color, animation, exportOptions, 
     .map((cell) => {
       const fill = sourceMatchCellBackground
         ? resolveDisplaySourceMatchColor(cell, color)
-        : resolveDisplayCellColor(quantizeBrightness(cell.background), color, "background");
+        : resolveDisplayCellColor(
+            quantizeBrightness(cell.background),
+            color,
+            "background",
+            cell.sourceInverted,
+            cell.sourceExposure,
+            cell.sourceTone
+          );
       const opacity = !duotoneMode && cell.backgroundAlpha < 1 ? ` opacity="${formatNumber(cell.backgroundAlpha)}"` : "";
       return `<rect x="${formatNumber(cell.x * stepX)}" y="${formatNumber(cell.y * stepY)}" width="${formatNumber(
         backgroundCellWidth

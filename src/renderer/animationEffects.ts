@@ -4,6 +4,7 @@ import type {
   AsciiSettings,
   BreakupSettings,
   CellRenderData,
+  ColorSettings,
   FrameSettings,
   GlyphMetric,
   ImageSettings,
@@ -24,6 +25,25 @@ export interface AnimatedProcessingSettings {
   frame: FrameSettings;
   breakup: BreakupSettings;
 }
+
+export const resolveVideoProceduralAnimation = (
+  animation: AnimationSettings,
+  color: ColorSettings
+): AnimationSettings => {
+  const proceduralTimelineEnabled =
+    animation.matrixOverlayEnabled ||
+    (color.hitsOfColor.enabled && color.hitsOfColor.animated);
+
+  return {
+    ...animation,
+    enabled: proceduralTimelineEnabled,
+    type: "wave",
+    characterVariation: 0,
+    matrixTransitionColorEnabled: false,
+    matrixTransitionAmount: 0,
+    echoEnabled: false
+  };
+};
 
 const normalizedLoopTime = (timeSeconds: number, loopDuration: number) => {
   const duration = Math.max(0.001, loopDuration);
@@ -135,6 +155,52 @@ const matrixProgress = (progress: number, speed: number) => {
 };
 
 const matrixChancePulse = (fraction: number) => Math.sin(clamp01(fraction) * Math.PI);
+
+const matrixSeedSalt = (ascii: AsciiSettings, controls: MatrixGlyphControls) => {
+  const seed = Number.isFinite(ascii.randomSeed) ? Math.trunc(ascii.randomSeed) : 1337;
+  return controls.salt + ((seed % 100_000) + 100_000) % 100_000;
+};
+
+const resolveMatrixCellTiming = (
+  cell: CellRenderData,
+  progress: number,
+  slots: number,
+  secondarySlots: number,
+  controls: MatrixGlyphControls
+) => {
+  const cellPhase = hash(cell.x, cell.y, 73 + controls.salt);
+  const cellPhaseB = hash(cell.x, cell.y, 89 + controls.salt);
+  const localProgress = controls.continuous
+    ? (matrixProgress(progress, controls.speed) + cellPhase) % 1
+    : (progress + cellPhase) % 1;
+  const slot = Math.min(slots - 1, Math.floor(localProgress * slots));
+  const fraction = localProgress * slots - slot;
+  const secondaryProgress = controls.continuous
+    ? (matrixProgress(progress, controls.speed) + cellPhaseB) % 1
+    : (progress + cellPhaseB + slot / Math.max(1, slots)) % 1;
+  const secondarySlot = Math.min(secondarySlots - 1, Math.floor(secondaryProgress * secondarySlots));
+
+  return {
+    slot,
+    secondarySlot,
+    fraction
+  };
+};
+
+const matrixChangeChance = (
+  cell: CellRenderData,
+  baseChance: number,
+  fraction: number,
+  slot: number,
+  controls: MatrixGlyphControls
+) => {
+  const pulse = matrixChancePulse(fraction);
+  if (controls.continuous) {
+    return baseChance * (0.24 + pulse * 0.52 + hash(cell.x, cell.y, slot + 191 + controls.salt) * 0.16);
+  }
+  const cellVariation = 0.82 + hash(cell.x, cell.y, slot + 191 + controls.salt) * 0.18;
+  return baseChance * (0.34 + pulse * 0.66) * cellVariation;
+};
 
 const matrixTransitionStrength = (
   cell: CellRenderData,
@@ -255,7 +321,6 @@ const applyMatrixGlyphs = (
   grid: RenderGrid,
   ascii: AsciiSettings,
   animation: AnimationSettings,
-  amount: number,
   progress: number,
   controls: MatrixGlyphControls = {
     intensity: animation.strength,
@@ -269,9 +334,11 @@ const applyMatrixGlyphs = (
 ): RenderGrid => {
   const baseChance = clamp01(controls.intensity / 100);
   const randomness = clamp01(controls.randomness / 100);
-  const continuous = controls.continuous;
-  const localMatrixProgress = matrixProgress(progress, controls.speed);
-  const slots = matrixSlotCount(controls);
+  const seededControls: MatrixGlyphControls = {
+    ...controls,
+    salt: matrixSeedSalt(ascii, controls)
+  };
+  const slots = matrixSlotCount(seededControls);
   const secondarySlots = Math.max(3, Math.round(slots * 0.37));
 
   if (baseChance <= 0) {
@@ -289,31 +356,26 @@ const applyMatrixGlyphs = (
         return cell;
       }
 
-      const cellPhase = hash(cell.x, cell.y, 73 + controls.salt);
-      const cellPhaseB = hash(cell.x, cell.y, 89 + controls.salt);
-      const localProgress = continuous ? (localMatrixProgress + cellPhase) % 1 : variedProgress(cell, amount, animation, 97 + controls.salt);
-      const slot = Math.min(slots - 1, Math.floor(localProgress * slots));
-      const fraction = localProgress * slots - slot;
-      const secondarySlot = Math.min(
-        secondarySlots - 1,
-        Math.floor(((localMatrixProgress + cellPhaseB) % 1) * secondarySlots)
+      const { slot, secondarySlot, fraction } = resolveMatrixCellTiming(
+        cell,
+        progress,
+        slots,
+        secondarySlots,
+        seededControls
       );
-      const pulse = matrixChancePulse(fraction);
-      const chance = continuous
-        ? baseChance * (0.22 + pulse * 0.5 + hash(cell.x, cell.y, slot + 191 + controls.salt) * 0.16)
-        : baseChance * localProgress;
-      if (hash(cell.x, cell.y, slot + secondarySlot * 13 + controls.salt) > chance) {
+      const chance = matrixChangeChance(cell, baseChance, fraction, slot, seededControls);
+      if (hash(cell.x, cell.y, slot + secondarySlot * 13 + seededControls.salt) > chance) {
         return cell;
       }
 
       const baseIndex = Math.round(clamp01(cell.foreground) * (glyphCount - 1));
       const maxSpan = Math.max(1, Math.ceil((glyphCount - 1) * (0.08 + randomness * 0.62)));
       const randomOffset = Math.round(
-        (hash(cell.x + slot * 17, cell.y + secondarySlot * 31, slot + 17 + controls.salt) * 2 - 1) * maxSpan
+        (hash(cell.x + slot * 17, cell.y + secondarySlot * 31, slot + 17 + seededControls.salt) * 2 - 1) * maxSpan
       );
       const fallbackOffset =
         randomOffset === 0 && maxSpan > 0
-          ? hash(cell.x, cell.y, slot + 211 + controls.salt) > 0.5
+          ? hash(cell.x, cell.y, slot + 211 + seededControls.salt) > 0.5
             ? 1
             : -1
           : randomOffset;
@@ -325,7 +387,7 @@ const applyMatrixGlyphs = (
 
       return withMatrixCellPulse(
         cell,
-        matrixTransitionStrength(cell, animation, controls, slot, secondarySlot, fraction),
+        matrixTransitionStrength(cell, animation, seededControls, slot, secondarySlot, fraction),
         fraction,
         { foreground: nextForeground }
       );
@@ -350,29 +412,24 @@ const applyMatrixGlyphs = (
       return cell;
     }
 
-    const cellPhase = hash(cell.x, cell.y, 73 + controls.salt);
-    const cellPhaseB = hash(cell.x, cell.y, 89 + controls.salt);
-    const localProgress = continuous ? (localMatrixProgress + cellPhase) % 1 : variedProgress(cell, amount, animation, 97 + controls.salt);
-    const slot = Math.min(slots - 1, Math.floor(localProgress * slots));
-    const fraction = localProgress * slots - slot;
-    const secondarySlot = Math.min(
-      secondarySlots - 1,
-      Math.floor(((localMatrixProgress + cellPhaseB) % 1) * secondarySlots)
+    const { slot, secondarySlot, fraction } = resolveMatrixCellTiming(
+      cell,
+      progress,
+      slots,
+      secondarySlots,
+      seededControls
     );
-    const pulse = matrixChancePulse(fraction);
-    const chance = continuous
-      ? baseChance * (0.24 + pulse * 0.52 + hash(cell.x, cell.y, slot + 191 + controls.salt) * 0.16)
-      : baseChance * localProgress;
-    if (!cell.glyph || cell.glyph === " " || hash(cell.x, cell.y, slot + secondarySlot * 13 + controls.salt) > chance) {
+    const chance = matrixChangeChance(cell, baseChance, fraction, slot, seededControls);
+    if (!cell.glyph || cell.glyph === " " || hash(cell.x, cell.y, slot + secondarySlot * 13 + seededControls.salt) > chance) {
       return cell;
     }
     const currentIndex = characters.indexOf(cell.glyph);
     const maxSpan = Math.max(1, Math.ceil((characters.length - 1) * (0.1 + randomness * 0.8)));
     const randomOffset = Math.round(
-      (hash(cell.x + slot * 17, cell.y + secondarySlot * 31, slot + 17 + controls.salt) * 2 - 1) * maxSpan
+      (hash(cell.x + slot * 17, cell.y + secondarySlot * 31, slot + 17 + seededControls.salt) * 2 - 1) * maxSpan
     );
     const fallbackIndex = Math.floor(
-      hash(cell.x + slot * 23, cell.y + secondarySlot * 29, slot + 331 + controls.salt) * characters.length
+      hash(cell.x + slot * 23, cell.y + secondarySlot * 29, slot + 331 + seededControls.salt) * characters.length
     );
     const index =
       currentIndex >= 0
@@ -385,7 +442,7 @@ const applyMatrixGlyphs = (
 
     return withMatrixCellPulse(
       cell,
-      matrixTransitionStrength(cell, animation, controls, slot, secondarySlot, fraction),
+      matrixTransitionStrength(cell, animation, seededControls, slot, secondarySlot, fraction),
       fraction,
       { glyph: nextGlyph }
     );
@@ -417,7 +474,7 @@ export const resolveRenderAnimationState = (
   const progress = getContinuousProgress(animation, timeSeconds);
   const withMatrixOverlay = (nextGrid: RenderGrid) =>
     animation.matrixOverlayEnabled
-      ? applyMatrixGlyphs(nextGrid, ascii, animation, amount, progress, {
+      ? applyMatrixGlyphs(nextGrid, ascii, animation, progress, {
           intensity: animation.matrixOverlayIntensity,
           speed: animation.matrixOverlaySpeed,
           changeRate: animation.matrixOverlayChangeRate,
@@ -439,7 +496,6 @@ export const resolveRenderAnimationState = (
 
   if (animation.type === "matrix") {
     const matrixEffectProgress = getEffectLoopProgress(animation, timeSeconds);
-    const matrixAmount = linearPingPong(matrixEffectProgress);
     const matrixCharacterAnimation: AnimationSettings = {
       ...animation,
       characterVariation: 0,
@@ -451,7 +507,7 @@ export const resolveRenderAnimationState = (
       brightnessMultiplier: 1,
       glyphAlphaMultiplier: 1,
       glyphScaleMultiplier: 1,
-      grid: applyMatrixGlyphs(grid, ascii, matrixCharacterAnimation, matrixAmount, matrixEffectProgress)
+      grid: applyMatrixGlyphs(grid, ascii, matrixCharacterAnimation, matrixEffectProgress)
     };
   }
 
@@ -524,9 +580,8 @@ export const resolveAnimatedProcessingSettings = (
   }
 
   if (animation.type === "ambient") {
-    const progress = getContinuousProgress(animation, timeSeconds);
-    const cycles = Math.max(1, 1 + Math.floor(clamp01(animation.velocity / 400) * 3));
-    const phase = progress * TAU * cycles;
+    const effectProgress = getEffectLoopProgress(animation, timeSeconds);
+    const phase = effectProgress * TAU;
     const movementAmount = (animation.intensity / 100) * 9;
     const smoothness = clamp01(animation.strength / 100);
     const wave = Math.sin(phase);

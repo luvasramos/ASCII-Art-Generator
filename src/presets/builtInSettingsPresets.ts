@@ -35,8 +35,8 @@ const readSettingsPreset = (
   };
 };
 
-export const turionImageGlyphPresetId = "builtin-turion-image-glyph";
+export const turionImageGlyphPresetId = "turion-image-glyphs-1-0";
 
 export const builtInSettingsPresets: SettingsPreset[] = [
-  readSettingsPreset(turionImageGlyphPresetFile, turionImageGlyphPresetId, "Turion Image Glyph")
+  readSettingsPreset(turionImageGlyphPresetFile, turionImageGlyphPresetId, "turion image glyphs 1.0")
 ];

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PanelRightClose, PanelRightOpen } from "lucide-react";
 import { normalizeCharacterSet } from "./ascii/charset";
 import { downloadBlob } from "./export/download";
+import { getMp4UnavailableReason } from "./export/exportCapabilities";
 import { exportAsciiGif } from "./export/exportGif";
 import { getFinalPreviewCacheCompatibility } from "./export/finalPreviewCacheCompatibility";
 import { createCanvasPngBlob, createPngBlob, exportPng } from "./export/exportPng";
@@ -19,6 +20,7 @@ import {
   createRenderedAnimationPreviewCacheKey,
   getRenderedPreviewCache
 } from "./renderer/useRenderedAnimationPreview";
+import { resolveVideoProceduralAnimation } from "./renderer/animationEffects";
 import { useAsciiProcessor } from "./renderer/useAsciiProcessor";
 import type {
   AnimationPreviewFormat,
@@ -36,6 +38,9 @@ import { TopLeftActions } from "./ui/TopLeftActions";
 declare const process: { env: { NODE_ENV?: string } };
 
 const persistedImageLimit = 3_200_000;
+const videoPreviewTargetFps = 18;
+const fullVideoSupportMessage =
+  "For full video support, run the app with npm run dev, npm run preview, or from the hosted GitHub Pages site.";
 
 const exportFileName = (sourceName: string, extension: "png" | "svg") => {
   const base = sourceName.replace(/\.[a-z0-9]+$/i, "").replace(/[^a-z0-9-_]+/gi, "-").toLowerCase();
@@ -56,15 +61,22 @@ const isAbortError = (error: unknown) =>
 
 const mp4FailureStatus = (error: unknown) => {
   const message = error instanceof Error ? error.message : "";
-  if (message.includes("local server")) {
-    return "MP4 export requires running the app from a local server.";
+  if (message.includes("MP4 export requires") || message.includes("Worker") || message.includes("WebAssembly")) {
+    return message;
   }
   return "MP4 conversion failed. Export WebM instead.";
 };
 
 const isSupportedMediaFile = (file: File) => isSupportedImage(file) || isSupportedVideo(file);
+const isFileProtocolApp = () => typeof window !== "undefined" && window.location.protocol === "file:";
+const fileProtocolVideoSupportWarning = () => (isFileProtocolApp() ? fullVideoSupportMessage : null);
+const withFileProtocolVideoHint = (message: string) => {
+  const warning = fileProtocolVideoSupportWarning();
+  return warning ? `${message} ${warning}` : message;
+};
 
 const visualEditPreviewSettleMs = 560;
+const maskPreviewSettleMs = 780;
 
 const inactiveVisualEditPreview: VisualEditPreviewState = {
   isActive: false,
@@ -93,15 +105,20 @@ export default function App() {
   const [mediaVersion, setMediaVersion] = useState(0);
   const [sidebarVisible, setSidebarVisible] = useState(true);
   const [toneRangePreview, setToneRangePreview] = useState<ToneRangePreview | null>(null);
+  const [maskPreviewVisible, setMaskPreviewVisible] = useState(false);
   const [visualEditPreview, setVisualEditPreview] = useState<VisualEditPreviewState>(inactiveVisualEditPreview);
   const [sourcePaletteRefreshVersion, setSourcePaletteRefreshVersion] = useState(0);
   const [sourcePaletteExtracting, setSourcePaletteExtracting] = useState(false);
   const videoSourceRef = useRef<LoadedVideoSource | null>(null);
   const videoPreviewLastSampleRef = useRef(-1);
+  const videoSeekTokenRef = useRef(0);
+  const videoSeekResumeRef = useRef(false);
   const videoExportAbortRef = useRef<AbortController | null>(null);
   const syncedImageDataUrlRef = useRef<string | null>(null);
   const sourcePaletteRequestRef = useRef(0);
   const visualEditReturnTimerRef = useRef<number | null>(null);
+  const maskPreviewReturnTimerRef = useRef<number | null>(null);
+  const maskPreviewInteractionDepthRef = useRef(0);
 
   const clearVisualEditReturnTimer = useCallback(() => {
     if (visualEditReturnTimerRef.current !== null) {
@@ -109,6 +126,48 @@ export default function App() {
       visualEditReturnTimerRef.current = null;
     }
   }, []);
+
+  const clearToneRangePreview = useCallback(() => {
+    setToneRangePreview(null);
+  }, []);
+
+  const clearMaskPreviewReturnTimer = useCallback(() => {
+    if (maskPreviewReturnTimerRef.current !== null) {
+      window.clearTimeout(maskPreviewReturnTimerRef.current);
+      maskPreviewReturnTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleMaskPreviewHide = useCallback(() => {
+    clearMaskPreviewReturnTimer();
+    maskPreviewReturnTimerRef.current = window.setTimeout(() => {
+      maskPreviewReturnTimerRef.current = null;
+      if (maskPreviewInteractionDepthRef.current <= 0) {
+        setMaskPreviewVisible(false);
+      }
+    }, maskPreviewSettleMs);
+  }, [clearMaskPreviewReturnTimer]);
+
+  const beginMaskPreview = useCallback(() => {
+    clearMaskPreviewReturnTimer();
+    maskPreviewInteractionDepthRef.current += 1;
+    setMaskPreviewVisible(true);
+  }, [clearMaskPreviewReturnTimer]);
+
+  const finishMaskPreview = useCallback(() => {
+    maskPreviewInteractionDepthRef.current = Math.max(0, maskPreviewInteractionDepthRef.current - 1);
+    if (maskPreviewInteractionDepthRef.current <= 0) {
+      scheduleMaskPreviewHide();
+    }
+  }, [scheduleMaskPreviewHide]);
+
+  const pulseMaskPreview = useCallback(() => {
+    clearMaskPreviewReturnTimer();
+    setMaskPreviewVisible(true);
+    if (maskPreviewInteractionDepthRef.current <= 0) {
+      scheduleMaskPreviewHide();
+    }
+  }, [clearMaskPreviewReturnTimer, scheduleMaskPreviewHide]);
 
   const beginVisualEditPreview = useCallback(
     (reason: string) => {
@@ -161,9 +220,17 @@ export default function App() {
     [beginVisualEditPreview, finishVisualEditPreview]
   );
 
-  useEffect(() => () => clearVisualEditReturnTimer(), [clearVisualEditReturnTimer]);
+  useEffect(
+    () => () => {
+      clearVisualEditReturnTimer();
+      clearMaskPreviewReturnTimer();
+    },
+    [clearMaskPreviewReturnTimer, clearVisualEditReturnTimer]
+  );
 
   const releaseVideoSource = useCallback(() => {
+    videoSeekTokenRef.current += 1;
+    videoSeekResumeRef.current = false;
     const current = videoSourceRef.current;
     if (current) {
       current.element.pause();
@@ -179,6 +246,7 @@ export default function App() {
 
   const loadDataUrl = useCallback(
     async (name: string, dataUrl: string, persist: boolean) => {
+      clearToneRangePreview();
       setStatus("Decoding image");
       releaseVideoSource();
       setMediaKind("image");
@@ -194,12 +262,13 @@ export default function App() {
       }
       setStatus(`${nextImageData.width} x ${nextImageData.height} source`);
     },
-    [releaseVideoSource, store]
+    [clearToneRangePreview, releaseVideoSource, store]
   );
 
   const handleImageFile = useCallback(
     async (file: File) => {
       try {
+        clearToneRangePreview();
         if (!isSupportedImage(file)) {
           setStatus("Use JPG, PNG, WEBP, MP4, WebM, or browser-supported MOV");
           return;
@@ -220,7 +289,7 @@ export default function App() {
         setStatus(error instanceof Error ? error.message : "Image load failed");
       }
     },
-    [releaseVideoSource, store]
+    [clearToneRangePreview, releaseVideoSource, store]
   );
 
   const sampleCurrentVideoFrame = useCallback((source: LoadedVideoSource) => {
@@ -233,6 +302,7 @@ export default function App() {
   const handleVideoFile = useCallback(
     async (file: File) => {
       try {
+        clearToneRangePreview();
         if (!isSupportedVideo(file)) {
           setStatus("Use MP4, WebM, or MOV video files supported by this browser");
           return;
@@ -255,10 +325,10 @@ export default function App() {
           `${nextSource.width} x ${nextSource.height} video, ${formatTime(nextSource.duration)} duration`
         );
       } catch (error) {
-        setStatus(error instanceof Error ? error.message : "Video load failed");
+        setStatus(withFileProtocolVideoHint(error instanceof Error ? error.message : "Video load failed"));
       }
     },
-    [releaseVideoSource, sampleCurrentVideoFrame, store]
+    [clearToneRangePreview, releaseVideoSource, sampleCurrentVideoFrame, store]
   );
 
   const handleMediaFile = useCallback(
@@ -395,12 +465,22 @@ export default function App() {
       }
     };
     const handleTimeUpdate = () => setVideoCurrentTime(video.currentTime);
+    const handlePlay = () => setIsVideoPlaying(true);
+    const handlePause = () => {
+      if (!video.ended) {
+        setIsVideoPlaying(false);
+      }
+    };
 
     video.addEventListener("ended", handleEnded);
     video.addEventListener("timeupdate", handleTimeUpdate);
+    video.addEventListener("play", handlePlay);
+    video.addEventListener("pause", handlePause);
     return () => {
       video.removeEventListener("ended", handleEnded);
       video.removeEventListener("timeupdate", handleTimeUpdate);
+      video.removeEventListener("play", handlePlay);
+      video.removeEventListener("pause", handlePause);
     };
   }, [sampleCurrentVideoFrame, videoSource]);
 
@@ -409,10 +489,13 @@ export default function App() {
       return undefined;
     }
 
-    let animationFrame = 0;
     let cancelled = false;
+    let animationFrame = 0;
+    let videoFrameCallback = 0;
     const video = videoSource.element;
-    const sample = () => {
+    const sampleIntervalSeconds = 1 / videoPreviewTargetFps;
+
+    const sampleIfDue = (mediaTime = video.currentTime) => {
       if (cancelled) {
         return;
       }
@@ -420,21 +503,51 @@ export default function App() {
         setIsVideoPlaying(false);
         return;
       }
-      setVideoCurrentTime(video.currentTime);
-      if (Math.abs(video.currentTime - videoPreviewLastSampleRef.current) >= 1 / 15) {
+      setVideoCurrentTime(mediaTime);
+      if (
+        videoPreviewLastSampleRef.current < 0 ||
+        Math.abs(mediaTime - videoPreviewLastSampleRef.current) >= sampleIntervalSeconds
+      ) {
         try {
           sampleCurrentVideoFrame(videoSource);
         } catch {
           // Some browsers briefly report a playable video before the current frame is readable.
         }
       }
-      animationFrame = window.requestAnimationFrame(sample);
     };
 
-    animationFrame = window.requestAnimationFrame(sample);
+    const scheduleVideoFrame = () => {
+      if (!video.requestVideoFrameCallback) {
+        return;
+      }
+      videoFrameCallback = video.requestVideoFrameCallback((_, metadata) => {
+        sampleIfDue(metadata.mediaTime ?? video.currentTime);
+        if (!cancelled && !video.paused && !video.ended) {
+          scheduleVideoFrame();
+        }
+      });
+    };
+
+    if (typeof video.requestVideoFrameCallback === "function") {
+      scheduleVideoFrame();
+    } else {
+      const sample = () => {
+        sampleIfDue(video.currentTime);
+        if (!cancelled && !video.paused && !video.ended) {
+          animationFrame = window.requestAnimationFrame(sample);
+        }
+      };
+      animationFrame = window.requestAnimationFrame(sample);
+    }
+
     return () => {
       cancelled = true;
-      window.cancelAnimationFrame(animationFrame);
+      if (animationFrame) {
+        window.cancelAnimationFrame(animationFrame);
+      }
+      if (videoFrameCallback && typeof video.cancelVideoFrameCallback === "function") {
+        video.cancelVideoFrameCallback(videoFrameCallback);
+      }
     };
   }, [isVideoPlaying, sampleCurrentVideoFrame, videoSource]);
 
@@ -455,6 +568,10 @@ export default function App() {
       setStatus("Animating still image");
     }
   }, [isStillImageAnimationActive]);
+
+  useEffect(() => {
+    clearToneRangePreview();
+  }, [clearToneRangePreview, store.animation.enabled, store.animation.type]);
 
   useEffect(() => {
     if (!store.imageDataUrl || store.imageDataUrl === syncedImageDataUrlRef.current) {
@@ -511,6 +628,7 @@ export default function App() {
     frame: store.frame,
     breakup: store.breakup,
     color: store.color,
+    mask: store.mask,
     glyphMetrics
   });
 
@@ -547,6 +665,7 @@ export default function App() {
         image: store.image,
         frame: store.frame,
         breakup: store.breakup,
+        mask: store.mask,
         color: store.color,
         exportOptions: store.exportOptions,
         exportScale: store.exportScale,
@@ -575,6 +694,7 @@ export default function App() {
       store.font,
       store.frame,
       store.image,
+      store.mask,
       store.renderedPreview
     ]
   );
@@ -605,6 +725,7 @@ export default function App() {
       image: store.image,
       frame: store.frame,
       breakup: store.breakup,
+      mask: store.mask,
       color: store.color,
       exportOptions: store.exportOptions,
       exportScale: store.exportScale,
@@ -628,7 +749,8 @@ export default function App() {
     store.exportScale,
     store.font,
     store.frame,
-    store.image
+    store.image,
+    store.mask
   ]);
 
   const handleExport = useCallback(async () => {
@@ -636,6 +758,7 @@ export default function App() {
       return;
     }
     try {
+      clearToneRangePreview();
       setStatus("Exporting PNG");
       const animatedSnapshot = await createAnimatedPngSnapshot();
       if (animatedSnapshot) {
@@ -648,6 +771,7 @@ export default function App() {
         font: store.font,
         ascii: store.ascii,
         color: store.color,
+        mask: store.mask,
         animation: store.animation,
         exportOptions: store.exportOptions,
         scale: store.exportScale,
@@ -659,6 +783,7 @@ export default function App() {
       setStatus("Export failed");
     }
   }, [
+    clearToneRangePreview,
     createAnimatedPngSnapshot,
     grid,
     store.ascii,
@@ -668,7 +793,8 @@ export default function App() {
     store.exportScale,
     store.font,
     store.frame.dpi,
-    store.imageName
+    store.imageName,
+    store.mask
   ]);
 
   const handleCopyPng = useCallback(async () => {
@@ -676,6 +802,7 @@ export default function App() {
       return;
     }
     try {
+      clearToneRangePreview();
       if (!navigator.clipboard || typeof ClipboardItem === "undefined") {
         setStatus("PNG clipboard copy is not supported in this browser");
         return;
@@ -688,6 +815,7 @@ export default function App() {
           font: store.font,
           ascii: store.ascii,
           color: store.color,
+          mask: store.mask,
           animation: store.animation,
           exportOptions: store.exportOptions,
           scale: store.exportScale,
@@ -698,13 +826,14 @@ export default function App() {
     } catch (error) {
       setStatus("Export failed");
     }
-  }, [createAnimatedPngSnapshot, grid, store.ascii, store.animation, store.color, store.exportOptions, store.exportScale, store.font, store.frame.dpi]);
+  }, [clearToneRangePreview, createAnimatedPngSnapshot, grid, store.ascii, store.animation, store.color, store.exportOptions, store.exportScale, store.font, store.frame.dpi, store.mask]);
 
   const handleExportSvg = useCallback(() => {
     if (!grid) {
       return;
     }
     try {
+      clearToneRangePreview();
       setStatus("Exporting SVG");
       exportSvg({
         grid,
@@ -719,7 +848,7 @@ export default function App() {
     } catch (error) {
       setStatus("Export failed");
     }
-  }, [grid, store.ascii, store.animation, store.color, store.exportOptions, store.font, store.imageName]);
+  }, [clearToneRangePreview, grid, store.ascii, store.animation, store.color, store.exportOptions, store.font, store.imageName]);
 
   const handleToggleVideoPlayback = useCallback(async () => {
     const source = videoSourceRef.current;
@@ -728,6 +857,7 @@ export default function App() {
     }
     const video = source.element;
     if (!video.paused && !video.ended) {
+      videoSeekResumeRef.current = false;
       video.pause();
       setIsVideoPlaying(false);
       try {
@@ -740,15 +870,20 @@ export default function App() {
 
     try {
       if (video.ended || (Number.isFinite(video.duration) && video.currentTime >= video.duration)) {
+        videoSeekTokenRef.current += 1;
         await seekVideo(video, 0);
+        if (videoSourceRef.current !== source) {
+          return;
+        }
         sampleCurrentVideoFrame(source);
       }
       await video.play();
+      videoSeekResumeRef.current = false;
       setIsVideoPlaying(true);
       setStatus("Playing video preview");
     } catch (error) {
       setIsVideoPlaying(false);
-      setStatus(error instanceof Error ? error.message : "Video playback failed");
+      setStatus(withFileProtocolVideoHint(error instanceof Error ? error.message : "Video playback failed"));
     }
   }, [sampleCurrentVideoFrame]);
 
@@ -759,19 +894,35 @@ export default function App() {
         return;
       }
       const video = source.element;
-      const wasPlaying = !video.paused && !video.ended;
+      const wasPlaying = (!video.paused && !video.ended) || videoSeekResumeRef.current;
+      videoSeekResumeRef.current = wasPlaying;
+      const seekToken = videoSeekTokenRef.current + 1;
+      videoSeekTokenRef.current = seekToken;
       try {
         video.pause();
         setIsVideoPlaying(false);
         await seekVideo(video, time);
+        if (videoSeekTokenRef.current !== seekToken || videoSourceRef.current !== source) {
+          return;
+        }
         sampleCurrentVideoFrame(source);
         setStatus(`Video frame ${formatTime(video.currentTime)} / ${formatTime(source.duration)}`);
         if (wasPlaying) {
           await video.play();
+          if (videoSeekTokenRef.current !== seekToken || videoSourceRef.current !== source) {
+            return;
+          }
+          videoSeekResumeRef.current = false;
           setIsVideoPlaying(true);
+        } else {
+          videoSeekResumeRef.current = false;
         }
       } catch (error) {
-        setStatus(error instanceof Error ? error.message : "Video seek failed");
+        if (videoSeekTokenRef.current === seekToken) {
+          videoSeekResumeRef.current = false;
+          setIsVideoPlaying(false);
+          setStatus(withFileProtocolVideoHint(error instanceof Error ? error.message : "Video seek failed"));
+        }
       }
     },
     [sampleCurrentVideoFrame]
@@ -783,6 +934,14 @@ export default function App() {
       return;
     }
 
+    clearToneRangePreview();
+    if (preferredExtension === "mp4") {
+      const mp4UnavailableReason = getMp4UnavailableReason();
+      if (mp4UnavailableReason) {
+        setStatus(mp4UnavailableReason);
+        return;
+      }
+    }
     const controller = new AbortController();
     videoExportAbortRef.current = controller;
     setIsExportingVideo(true);
@@ -800,10 +959,12 @@ export default function App() {
         image: store.image,
         frame: store.frame,
         breakup: store.breakup,
+        mask: store.mask,
         color: store.color,
         exportOptions: store.exportOptions,
         exportScale: store.exportScale,
         glyphMetrics,
+        animation: resolveVideoProceduralAnimation(store.animation, store.color),
         fps: store.animation.fps,
         quality: store.exportOptions.animatedExportQuality,
         preferredExtension,
@@ -821,24 +982,30 @@ export default function App() {
       if (preferredExtension === "mp4") {
         console.error("[ASCII Studio MP4] Video export failed", error);
       }
-      setStatus(isAbortError(error) ? "Video export canceled" : preferredExtension === "mp4" ? mp4FailureStatus(error) : "Export failed");
+      setStatus(
+        isAbortError(error)
+          ? "Video export canceled"
+          : withFileProtocolVideoHint(preferredExtension === "mp4" ? mp4FailureStatus(error) : "Export failed")
+      );
     } finally {
       videoExportAbortRef.current = null;
       setIsExportingVideo(false);
       setVideoExportProgress(0);
     }
   }, [
+    clearToneRangePreview,
     glyphMetrics,
     isExportingVideo,
     store.ascii,
-    store.animation.fps,
+    store.animation,
     store.breakup,
     store.color,
     store.exportOptions,
     store.exportScale,
     store.font,
     store.frame,
-    store.image
+    store.image,
+    store.mask
   ]);
 
   const handleExportVideo = useCallback(() => {
@@ -854,6 +1021,14 @@ export default function App() {
       return;
     }
 
+    clearToneRangePreview();
+    if (preferredExtension === "mp4") {
+      const mp4UnavailableReason = getMp4UnavailableReason();
+      if (mp4UnavailableReason) {
+        setStatus(mp4UnavailableReason);
+        return;
+      }
+    }
     const controller = new AbortController();
     videoExportAbortRef.current = controller;
     setIsExportingVideo(true);
@@ -880,6 +1055,7 @@ export default function App() {
         image: store.image,
         frame: store.frame,
         breakup: store.breakup,
+        mask: store.mask,
         color: store.color,
         exportOptions: store.exportOptions,
         exportScale: store.exportScale,
@@ -904,13 +1080,18 @@ export default function App() {
       if (preferredExtension === "mp4") {
         console.error("[ASCII Studio MP4] Animation export failed", error);
       }
-      setStatus(isAbortError(error) ? "Animation export canceled" : preferredExtension === "mp4" ? mp4FailureStatus(error) : "Export failed");
+      setStatus(
+        isAbortError(error)
+          ? "Animation export canceled"
+          : withFileProtocolVideoHint(preferredExtension === "mp4" ? mp4FailureStatus(error) : "Export failed")
+      );
     } finally {
       videoExportAbortRef.current = null;
       setIsExportingVideo(false);
       setVideoExportProgress(0);
     }
   }, [
+    clearToneRangePreview,
     glyphMetrics,
     getReusableFinalPreviewCache,
     imageAnimator,
@@ -925,7 +1106,8 @@ export default function App() {
     store.font,
     store.frame,
     store.image,
-    store.imageName
+    store.imageName,
+    store.mask
   ]);
 
   const handleExportAnimation = useCallback(() => {
@@ -941,6 +1123,7 @@ export default function App() {
       return;
     }
 
+    clearToneRangePreview();
     const controller = new AbortController();
     videoExportAbortRef.current = controller;
     setIsExportingVideo(true);
@@ -963,6 +1146,7 @@ export default function App() {
         image: store.image,
         frame: store.frame,
         breakup: store.breakup,
+        mask: store.mask,
         color: store.color,
         exportOptions: store.exportOptions,
         exportScale: store.exportScale,
@@ -985,6 +1169,7 @@ export default function App() {
       setVideoExportProgress(0);
     }
   }, [
+    clearToneRangePreview,
     glyphMetrics,
     getReusableFinalPreviewCache,
     imageAnimator,
@@ -999,7 +1184,8 @@ export default function App() {
     store.font,
     store.frame,
     store.image,
-    store.imageName
+    store.imageName,
+    store.mask
   ]);
 
   const handleExportAnimationPngSequence = useCallback(async () => {
@@ -1007,6 +1193,7 @@ export default function App() {
       return;
     }
 
+    clearToneRangePreview();
     const controller = new AbortController();
     videoExportAbortRef.current = controller;
     setIsExportingVideo(true);
@@ -1029,6 +1216,7 @@ export default function App() {
         image: store.image,
         frame: store.frame,
         breakup: store.breakup,
+        mask: store.mask,
         color: store.color,
         exportOptions: store.exportOptions,
         exportScale: store.exportScale,
@@ -1051,6 +1239,7 @@ export default function App() {
       setVideoExportProgress(0);
     }
   }, [
+    clearToneRangePreview,
     glyphMetrics,
     getReusableFinalPreviewCache,
     imageAnimator,
@@ -1065,7 +1254,8 @@ export default function App() {
     store.font,
     store.frame,
     store.image,
-    store.imageName
+    store.imageName,
+    store.mask
   ]);
 
   const handleStillImageModeChange = useCallback(
@@ -1073,6 +1263,7 @@ export default function App() {
       if (mediaKind !== "image") {
         return;
       }
+      clearToneRangePreview();
       setStillImageMode(mode);
       if (mode === "animate") {
         store.updateAnimation({ enabled: true });
@@ -1080,7 +1271,7 @@ export default function App() {
         setImageData(staticImageData);
       }
     },
-    [mediaKind, staticImageData, store]
+    [clearToneRangePreview, mediaKind, staticImageData, store]
   );
 
   const handleCancelVideoExport = useCallback(() => {
@@ -1099,6 +1290,7 @@ export default function App() {
           font={store.font}
           ascii={store.ascii}
           color={store.color}
+          mask={store.mask}
           exportOptions={store.exportOptions}
           exportScale={store.exportScale}
           image={store.image}
@@ -1114,7 +1306,8 @@ export default function App() {
             isVideo: mediaKind === "video" && Boolean(videoSource),
             isPlaying: isVideoPlaying,
             currentTime: videoCurrentTime,
-            duration: videoDuration
+            duration: videoDuration,
+            environmentWarning: fileProtocolVideoSupportWarning()
           }}
           onToggleVideoPlayback={handleToggleVideoPlayback}
           onVideoSeek={handleVideoSeek}
@@ -1123,6 +1316,8 @@ export default function App() {
           animateStillImageActive={isStillImageAnimationActive}
           onAnimationPerformanceWarning={setStatus}
           toneRangePreview={toneRangePreview}
+          maskPreviewVisible={maskPreviewVisible}
+          onClearToneRangePreview={clearToneRangePreview}
           visualEditPreview={visualEditPreview}
         />
         <TopLeftActions
@@ -1178,9 +1373,13 @@ export default function App() {
           sourcePaletteExtracting={sourcePaletteExtracting}
           onRefreshSourcePalette={handleRefreshSourcePalette}
           canAnimateImage={mediaKind === "image" && Boolean(staticImageData)}
+          isVideoLoaded={mediaKind === "video" && Boolean(videoSource)}
           stillImageMode={stillImageMode}
           onStillImageModeChange={handleStillImageModeChange}
           onToneRangePreviewChange={setToneRangePreview}
+          onMaskPreviewStart={beginMaskPreview}
+          onMaskPreviewEnd={finishMaskPreview}
+          onMaskPreviewPulse={pulseMaskPreview}
           onVisualEditPreviewStart={beginVisualEditPreview}
           onVisualEditPreviewEnd={finishVisualEditPreview}
           onVisualEditPreviewPulse={pulseVisualEditPreview}

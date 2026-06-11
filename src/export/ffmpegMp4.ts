@@ -1,5 +1,11 @@
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile } from "@ffmpeg/util";
+import {
+  collectVideoExportCapabilities,
+  getMp4UnavailableReason,
+  mp4EnvironmentFallback,
+  resolveFfmpegAssetUrls
+} from "./exportCapabilities";
 import { normalizeAnimationFps } from "../renderer/animationTiming";
 import type { AnimatedExportQuality } from "../renderer/types";
 
@@ -48,67 +54,18 @@ let exportSequence = 0;
 const ffmpegLoadTimeoutMs = 45_000;
 const ffmpegExecTimeoutMs = 300_000;
 const ffmpegReadTimeoutMs = 45_000;
-const mp4EnvironmentFallback =
-  "MP4 conversion could not start in this browser or hosting environment. You can export WebM now, or try localhost / Netlify / Cloudflare Pages for better MP4 support.";
-const ffmpegAssetPaths = {
-  coreURL: "ffmpeg/ffmpeg-core.js",
-  wasmURL: "ffmpeg/ffmpeg-core.wasm",
-  classWorkerURL: "ffmpeg/ffmpeg-worker.js"
-};
-const mediaRecorderMimeTypes = [
-  "video/mp4",
-  "video/mp4;codecs=h264",
-  "video/mp4;codecs=avc1.42E01E",
-  "video/webm;codecs=vp9",
-  "video/webm;codecs=vp8",
-  "video/webm"
-];
 
 const createAbortError = () => {
   const error = new DOMException("MP4 export canceled.", "AbortError");
   return error;
 };
 
-const resolveBundledAssetUrl = (assetUrl: string) => {
-  if (typeof window === "undefined") {
-    return assetUrl;
-  }
-  return new URL(assetUrl, document.baseURI || window.location.href).href;
-};
-
-const resolveFfmpegAssetUrls = () => ({
-  coreURL: resolveBundledAssetUrl(ffmpegAssetPaths.coreURL),
-  wasmURL: resolveBundledAssetUrl(ffmpegAssetPaths.wasmURL),
-  classWorkerURL: resolveBundledAssetUrl(ffmpegAssetPaths.classWorkerURL)
-});
-
-export const collectMp4RuntimeDiagnostics = () => {
-  const assetUrls = resolveFfmpegAssetUrls();
-  return {
-    href: typeof window === "undefined" ? "(no window)" : window.location.href,
-    protocol: typeof window === "undefined" ? "(no window)" : window.location.protocol,
-    assetUrls,
-    workerAvailable: typeof Worker !== "undefined",
-    webAssemblyAvailable: typeof WebAssembly !== "undefined",
-    mediaRecorderAvailable: typeof MediaRecorder !== "undefined",
-    mediaRecorderMimeTypes: mediaRecorderMimeTypes.map((mimeType) => ({
-      mimeType,
-      supported: typeof MediaRecorder !== "undefined" ? MediaRecorder.isTypeSupported(mimeType) : false
-    })),
-    crossOriginIsolated:
-      typeof window !== "undefined" && "crossOriginIsolated" in window ? window.crossOriginIsolated : false
-  };
-};
+export const collectMp4RuntimeDiagnostics = () => collectVideoExportCapabilities();
 
 const assertMp4CanRunHere = () => {
-  if (typeof window !== "undefined" && window.location.protocol === "file:") {
-    throw new Error("MP4 export requires running the app from a local server, not file://.");
-  }
-  if (typeof Worker === "undefined") {
-    throw new Error(`Worker unavailable. ${mp4EnvironmentFallback}`);
-  }
-  if (typeof WebAssembly === "undefined") {
-    throw new Error(`WebAssembly unavailable. ${mp4EnvironmentFallback}`);
+  const reason = getMp4UnavailableReason();
+  if (reason) {
+    throw new Error(reason);
   }
 };
 

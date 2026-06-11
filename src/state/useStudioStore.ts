@@ -21,7 +21,8 @@ import {
   defaultExportOptions,
   defaultFontSettings,
   defaultFrameSettings,
-  defaultImageSettings
+  defaultImageSettings,
+  defaultMaskSettings
 } from "./defaults";
 import { normalizePreviewFps } from "../renderer/animationTiming";
 import {
@@ -52,6 +53,7 @@ import type {
   ImageGlyphRecord,
   ImageSettings,
   LivePreviewOptimizationLevel,
+  MaskSettings,
   RenderedPreviewQuality,
   RenderedPreviewState,
   SettingsPreset,
@@ -68,6 +70,7 @@ interface StudioStore {
   frame: FrameSettings;
   breakup: BreakupSettings;
   animation: AnimationSettings;
+  mask: MaskSettings;
   renderedPreview: RenderedPreviewState;
   livePreviewOptimizationLevel: LivePreviewOptimizationLevel;
   color: ColorSettings;
@@ -87,6 +90,7 @@ interface StudioStore {
   updateFrame: (patch: Partial<FrameSettings>) => void;
   updateBreakup: (patch: Partial<BreakupSettings>) => void;
   updateAnimation: (patch: Partial<AnimationSettings>) => void;
+  updateMask: (patch: Partial<MaskSettings>) => void;
   setAnimationPreviewMode: (mode: AnimationPreviewMode) => void;
   setLivePreviewOptimizationLevel: (level: LivePreviewOptimizationLevel) => void;
   setAnimationPreviewFormat: (format: AnimationPreviewFormat) => void;
@@ -235,11 +239,19 @@ const normalizeColor = (
   }
 ): ColorSettings => {
   const sourcePalette = normalizeSourcePalette(color?.sourcePalette);
-  const hitsOfColor: Record<string, unknown> = isRecord(color?.hitsOfColor)
-    ? color.hitsOfColor
-    : isRecord(color?.hintsOfColor)
-      ? color.hintsOfColor
-      : {};
+  const legacyHitsOfColor: Record<string, unknown> = isRecord(color?.hitsOfColor) ? color.hitsOfColor : {};
+  const savedHintsOfColor: Record<string, unknown> = isRecord(color?.hintsOfColor) ? color.hintsOfColor : {};
+  const hitsOfColor = {
+    ...legacyHitsOfColor,
+    ...savedHintsOfColor
+  };
+  const hintColor =
+    hitsOfColor.color ??
+    hitsOfColor.hintColor ??
+    hitsOfColor.hitColor ??
+    hitsOfColor.animatedHintColor;
+  const hintsAnimated = asBoolean(hitsOfColor.animated, defaultColorSettings.hitsOfColor.animated);
+  const hintsEnabled = asBoolean(hitsOfColor.enabled, defaultColorSettings.hitsOfColor.enabled) || hintsAnimated;
   return {
     ...defaultColorSettings,
     paletteMode:
@@ -255,11 +267,11 @@ const normalizeColor = (
     duotoneThreshold: clamp(asNumber(color?.duotoneThreshold, defaultColorSettings.duotoneThreshold), 0, 1),
     customPalette: normalizeCustomPalette(color?.customPalette),
     hitsOfColor: {
-      enabled: asBoolean(hitsOfColor.enabled, defaultColorSettings.hitsOfColor.enabled),
-      color: asHexColor(hitsOfColor.color, defaultColorSettings.hitsOfColor.color),
+      enabled: hintsEnabled,
+      color: asHexColor(hintColor, defaultColorSettings.hitsOfColor.color),
       amount: clamp(asNumber(hitsOfColor.amount, defaultColorSettings.hitsOfColor.amount), 0, 100),
       seed: Math.trunc(asNumber(hitsOfColor.seed, defaultColorSettings.hitsOfColor.seed)),
-      animated: asBoolean(hitsOfColor.animated, defaultColorSettings.hitsOfColor.animated),
+      animated: hintsEnabled && hintsAnimated,
       animatedHintAmount: clamp(
         asNumber(
           hitsOfColor.animatedHintAmount ?? hitsOfColor.animatedAmount,
@@ -404,13 +416,15 @@ const normalizeImage = (image?: Partial<ImageSettings>, legacyToneInvert = defau
   brightness: clamp(asNumber(image?.brightness, defaultImageSettings.brightness), -0.5, 0.5),
   contrast: clamp(asNumber(image?.contrast, defaultImageSettings.contrast), 0.35, 2.4),
   exposure: clamp(asNumber(image?.exposure, defaultImageSettings.exposure), -2, 2),
+  saturation: clamp(asNumber(image?.saturation, defaultImageSettings.saturation), -100, 100),
+  hue: clamp(asNumber(image?.hue, defaultImageSettings.hue), -180, 180),
   shadows: clamp(asNumber(image?.shadows, defaultImageSettings.shadows), -100, 100),
   shadowsRange: clamp(asNumber(image?.shadowsRange, defaultImageSettings.shadowsRange), 0, 100),
   midtones: clamp(asNumber(image?.midtones, defaultImageSettings.midtones), -100, 100),
   midtonesRange: clamp(asNumber(image?.midtonesRange, defaultImageSettings.midtonesRange), 0, 100),
   highlights: clamp(asNumber(image?.highlights, defaultImageSettings.highlights), -100, 100),
   highlightsRange: clamp(asNumber(image?.highlightsRange, defaultImageSettings.highlightsRange), 0, 100),
-  sharpen: 0,
+  sharpen: clamp(asNumber(image?.sharpen, defaultImageSettings.sharpen), 0, 2.4),
   blur: clamp(asNumber(image?.blur, defaultImageSettings.blur), 0, 16),
   threshold: clamp(asNumber(image?.threshold, defaultImageSettings.threshold), 0, 1),
   posterization: clamp(asNumber(image?.posterization, defaultImageSettings.posterization), 0, 9),
@@ -474,13 +488,24 @@ const normalizeBreakup = (
   seed: Math.trunc(asNumber(breakup?.seed, defaultBreakupSettings.seed))
 });
 
+const normalizeMask = (mask?: Partial<MaskSettings>): MaskSettings => ({
+  enabled: asBoolean(mask?.enabled, defaultMaskSettings.enabled),
+  mix: clamp(asNumber(mask?.mix, defaultMaskSettings.mix), 0, 100),
+  cloudSize: clamp(asNumber(mask?.cloudSize, defaultMaskSettings.cloudSize), 1, 100),
+  softness: clamp(asNumber(mask?.softness, defaultMaskSettings.softness), 0, 100),
+  contrast: clamp(asNumber(mask?.contrast, defaultMaskSettings.contrast), 0, 100),
+  invert: asBoolean(mask?.invert, defaultMaskSettings.invert),
+  seed: Math.trunc(asNumber(mask?.seed, defaultMaskSettings.seed))
+});
+
 const normalizePreviewResolution = (value?: string): AnimationSettings["previewResolution"] =>
   value === "low" || value === "medium" || value === "high" || value === "full"
     ? value
     : defaultAnimationSettings.previewResolution;
 
 const normalizeAnimation = (
-  animation?: Partial<AnimationSettings> & {
+  animation?: Partial<Omit<AnimationSettings, "type">> & {
+    type?: string;
     direction?: string;
     scaleMovement?: string;
     effectLoopsPerLoop?: unknown;
@@ -497,14 +522,15 @@ const normalizeAnimation = (
 ): AnimationSettings => {
   const scaleMin = clamp(asNumber(animation?.scaleMin, defaultAnimationSettings.scaleMin), 5, 100);
   const scaleMax = clamp(asNumber(animation?.scaleMax, defaultAnimationSettings.scaleMax), 10, 200);
+  const animationType = animation?.type === "matrix-character-change" ? "matrix" : animation?.type;
   const type =
-    animation?.type === "fade" ||
-    animation?.type === "scale" ||
-    animation?.type === "matrix" ||
-    animation?.type === "breakup" ||
-    animation?.type === "spin" ||
-    animation?.type === "ambient"
-      ? animation.type
+    animationType === "fade" ||
+    animationType === "scale" ||
+    animationType === "matrix" ||
+    animationType === "breakup" ||
+    animationType === "spin" ||
+    animationType === "ambient"
+      ? animationType
       : defaultAnimationSettings.type;
 
   return {
@@ -526,16 +552,9 @@ const normalizeAnimation = (
       10
     ),
     matrixLoopStyle: animation?.matrixLoopStyle === "continuous" ? "continuous" : "pingpong",
-    matrixTransitionColorEnabled: asBoolean(
-      animation?.matrixTransitionColorEnabled,
-      defaultAnimationSettings.matrixTransitionColorEnabled
-    ),
+    matrixTransitionColorEnabled: false,
     matrixTransitionColor: asHexColor(animation?.matrixTransitionColor, defaultAnimationSettings.matrixTransitionColor),
-    matrixTransitionAmount: clamp(
-      asNumber(animation?.matrixTransitionAmount, defaultAnimationSettings.matrixTransitionAmount),
-      0,
-      100
-    ),
+    matrixTransitionAmount: 0,
     spinRotationsPerLoop: clamp(
       asNumber(animation?.spinRotationsPerLoop, defaultAnimationSettings.spinRotationsPerLoop),
       0.05,
@@ -673,6 +692,7 @@ const createSettingsSnapshot = (state: StudioStore): StudioSettingsSnapshot => {
     frame: normalizeFrame(state.frame),
     breakup: normalizeBreakup(state.breakup),
     animation: normalizeAnimation(state.animation),
+    mask: normalizeMask(state.mask),
     color,
     exportOptions: normalizeExportOptions(state.exportOptions),
     exportScale: normalizeExportScale(state.exportScale)
@@ -701,6 +721,7 @@ const normalizeSettingsSnapshot = (settings?: Partial<StudioSettingsSnapshot>): 
     frame: normalizeFrame(settings?.frame),
     breakup: normalizeBreakup(settings?.breakup),
     animation: normalizeAnimation(settings?.animation),
+    mask: normalizeMask(settings?.mask),
     color,
     exportOptions: normalizeExportOptions(settings?.exportOptions),
     exportScale: normalizeExportScale(settings?.exportScale)
@@ -716,6 +737,7 @@ const applySnapshotPatch = (settings?: Partial<StudioSettingsSnapshot>) => {
     frame: normalized.frame,
     breakup: normalized.breakup,
     animation: normalized.animation,
+    mask: normalized.mask,
     color: normalized.color,
     exportOptions: normalized.exportOptions,
     exportScale: normalized.exportScale
@@ -808,6 +830,7 @@ const defaultStudioSettings = defaultSettingsPreset?.settings ?? {
   frame: defaultFrameSettings,
   breakup: defaultBreakupSettings,
   animation: defaultAnimationSettings,
+  mask: defaultMaskSettings,
   color: defaultColorSettings,
   exportOptions: defaultExportOptions,
   exportScale: defaultExportScale
@@ -826,6 +849,7 @@ export const useStudioStore = create<StudioStore>()(
       frame: defaultStudioSettings.frame,
       breakup: defaultStudioSettings.breakup,
       animation: defaultStudioSettings.animation,
+      mask: defaultStudioSettings.mask,
       renderedPreview: createRenderedPreviewState(defaultStudioSettings.animation.fps),
       livePreviewOptimizationLevel: "balanced",
       color: defaultStudioSettings.color,
@@ -855,6 +879,7 @@ export const useStudioStore = create<StudioStore>()(
       updateFrame: (patch) => set((state) => withUndo(state, { frame: normalizeFrame({ ...state.frame, ...patch }) })),
       updateBreakup: (patch) => set((state) => withUndo(state, { breakup: { ...state.breakup, ...patch } })),
       updateAnimation: (patch) => set((state) => withUndo(state, { animation: normalizeAnimation({ ...state.animation, ...patch }) })),
+      updateMask: (patch) => set((state) => withUndo(state, { mask: normalizeMask({ ...state.mask, ...patch }) })),
       setAnimationPreviewMode: (mode) =>
         set((state) => ({
           renderedPreview: normalizeRenderedPreviewState(
@@ -1275,6 +1300,7 @@ export const useStudioStore = create<StudioStore>()(
           frame: defaultStudioSettings.frame,
           breakup: defaultStudioSettings.breakup,
           animation: defaultStudioSettings.animation,
+          mask: defaultStudioSettings.mask,
           renderedPreview: createRenderedPreviewState(
             defaultStudioSettings.animation.fps,
             state.renderedPreview.quality,
@@ -1313,6 +1339,7 @@ export const useStudioStore = create<StudioStore>()(
         frame: state.frame,
         breakup: state.breakup,
         animation: state.animation,
+        mask: state.mask,
         renderedPreview: createRenderedPreviewState(
           state.animation.fps,
           state.renderedPreview.quality,
@@ -1356,6 +1383,7 @@ export const useStudioStore = create<StudioStore>()(
           frame: normalizeFrame(value?.frame),
           breakup: normalizeBreakup(value?.breakup),
           animation: normalizeAnimation(value?.animation),
+          mask: normalizeMask(value?.mask),
           renderedPreview: normalizeRenderedPreviewState(value?.renderedPreview, defaultAnimationSettings.fps),
           livePreviewOptimizationLevel: normalizeLivePreviewOptimizationLevel(value?.livePreviewOptimizationLevel),
           color,

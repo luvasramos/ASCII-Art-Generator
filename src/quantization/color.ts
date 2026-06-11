@@ -1,4 +1,5 @@
 import type { CellRenderData, ColorSettings } from "../renderer/types";
+import { applySourceRgbProcessing, defaultSourceToneSettings } from "../processing/sourcePixels";
 
 export interface Rgb {
   r: number;
@@ -65,6 +66,12 @@ const samplePalette = (value: number, palette: string[]) => {
   };
 };
 
+const invertRgb = (color: Rgb): Rgb => ({
+  r: 255 - color.r,
+  g: 255 - color.g,
+  b: 255 - color.b
+});
+
 const pickPaletteColor = (value: number, palette: string[]) => {
   const index = Math.min(palette.length - 1, Math.max(0, Math.round(clamp01(value) * (palette.length - 1))));
   return parseHexColor(palette[index]);
@@ -87,6 +94,24 @@ const safePaletteRgb = (settings: ColorSettings) => {
   }
   paletteRgbCache.set(key, parsed);
   return parsed;
+};
+
+const safeDisplayPaletteRgb = (
+  settings: ColorSettings,
+  cell: Pick<CellRenderData, "sourceInverted" | "sourceExposure" | "sourceTone">
+) => {
+  const palette = safePaletteRgb(settings);
+  if (settings.paletteMode !== "source") {
+    return palette;
+  }
+  return palette.map((color) =>
+    applySourceRgbProcessing(
+      color,
+      cell.sourceInverted,
+      cell.sourceExposure,
+      cell.sourceTone ?? defaultSourceToneSettings
+    )
+  );
 };
 
 const nearestPaletteRgb = (source: Rgb, palette: Rgb[]) => {
@@ -116,7 +141,7 @@ export const resolveDisplaySourceMatchColor = (cell: CellRenderData, settings: C
     g: clampByte(cell.sourceG),
     b: clampByte(cell.sourceB)
   };
-  const matched = nearestPaletteRgb(source, safePaletteRgb(settings));
+  const matched = nearestPaletteRgb(source, safeDisplayPaletteRgb(settings, cell));
   const color = rgbToCss(matched);
   return settings.invert ? invertCssColor(color) : color;
 };
@@ -124,7 +149,10 @@ export const resolveDisplaySourceMatchColor = (cell: CellRenderData, settings: C
 export const resolveCellColor = (
   brightness: number,
   settings: ColorSettings,
-  layer: "foreground" | "background"
+  layer: "foreground" | "background",
+  sourceInverted = false,
+  sourceExposure = 0,
+  sourceTone = defaultSourceToneSettings
 ): string => {
   const curve = layer === "foreground" ? settings.foregroundCurve : settings.backgroundCurve;
   const crushed = Math.max(0, brightness - settings.shadowCrush) / Math.max(0.001, 1 - settings.shadowCrush);
@@ -138,7 +166,10 @@ export const resolveCellColor = (
 
   if (settings.paletteMode === "custom" || settings.paletteMode === "source") {
     const palette = safePalette(settings);
-    const base = settings.paletteMode === "source" ? pickPaletteColor(corrected, palette) : samplePalette(corrected, palette);
+    const base =
+      settings.paletteMode === "source"
+        ? applySourceRgbProcessing(pickPaletteColor(corrected, palette), sourceInverted, sourceExposure, sourceTone)
+        : samplePalette(corrected, palette);
     return `rgb(${base.r}, ${base.g}, ${base.b})`;
   }
 
@@ -166,8 +197,11 @@ export const invertCssColor = (color: string) => {
 export const resolveDisplayCellColor = (
   brightness: number,
   settings: ColorSettings,
-  layer: "foreground" | "background"
+  layer: "foreground" | "background",
+  sourceInverted = false,
+  sourceExposure = 0,
+  sourceTone = defaultSourceToneSettings
 ) => {
-  const color = resolveCellColor(brightness, settings, layer);
+  const color = resolveCellColor(brightness, settings, layer, sourceInverted, sourceExposure, sourceTone);
   return settings.invert ? invertCssColor(color) : color;
 };

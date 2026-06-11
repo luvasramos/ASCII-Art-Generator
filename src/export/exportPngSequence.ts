@@ -8,7 +8,8 @@ import type {
   FontSettings,
   FrameSettings,
   GlyphMetric,
-  ImageSettings
+  ImageSettings,
+  MaskSettings
 } from "../renderer/types";
 import type {
   RenderedPreviewCache,
@@ -19,6 +20,7 @@ import { cachedAnimationFrameMatches, renderCachedAnimationFrames } from "./cach
 import { downloadBlob } from "./download";
 import { resolveAnimatedExportFps } from "./exportQuality";
 import { forceStrictDuotoneCanvas, shouldForceStrictDuotonePixels } from "../renderer/strictDuotone";
+import { isSourceRevealMaskActive } from "../renderer/sourceRevealMask";
 import { createCanvasPngBlob } from "./exportPng";
 import { renderAsciiAnimationFrames } from "./renderAnimationFrames";
 import { createStoredZipBlob, type StoredZipFile } from "./zip";
@@ -32,6 +34,7 @@ interface ExportAsciiPngSequenceArgs {
   frame: FrameSettings;
   breakup: BreakupSettings;
   color: ColorSettings;
+  mask: MaskSettings;
   exportOptions: ExportOptions;
   exportScale: number;
   glyphMetrics: GlyphMetric[];
@@ -86,6 +89,7 @@ export const exportAsciiPngSequence = async ({
   frame,
   breakup,
   color,
+  mask,
   exportOptions,
   exportScale,
   glyphMetrics,
@@ -104,7 +108,7 @@ export const exportAsciiPngSequence = async ({
   const files: StoredZipFile[] = [];
   let accumulatedPngBytes = 0;
   const useCachedFrames = cachedAnimationFrameMatches(cachedFrames, normalizedFps, totalFrames);
-  const strictDuotonePixelGuard = shouldForceStrictDuotonePixels({ color, animation, font });
+  const strictDuotonePixelGuard = !isSourceRevealMaskActive(mask) && shouldForceStrictDuotonePixels({ color, animation, font });
 
   onStatus?.(useCachedFrames ? "Preparing PNG sequence from final preview" : "Preparing PNG sequence");
   onProgress?.(0);
@@ -123,6 +127,7 @@ export const exportAsciiPngSequence = async ({
         frame,
         breakup,
         color,
+        mask,
         exportOptions,
         exportScale,
         glyphMetrics,

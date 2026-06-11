@@ -1,17 +1,27 @@
 import { createGlyphAtlas } from "../atlas/glyphAtlas";
 import { createImageGlyphAtlas } from "../atlas/imageGlyphAtlas";
 import { renderAsciiToCanvas } from "../renderer/layeredCanvasRenderer";
-import type { AnimationSettings, AsciiSettings, ColorSettings, ExportOptions, FontSettings, RenderGrid } from "../renderer/types";
+import type {
+  AnimationSettings,
+  AsciiSettings,
+  ColorSettings,
+  ExportOptions,
+  FontSettings,
+  MaskSettings,
+  RenderGrid
+} from "../renderer/types";
 import { normalizeCharacterSet } from "../ascii/charset";
 import { downloadBlob } from "./download";
 import { scaleFontForRenderResolution } from "../renderer/geometry";
 import { forceStrictDuotoneCanvas, shouldForceStrictDuotonePixels } from "../renderer/strictDuotone";
+import { isSourceRevealMaskActive } from "../renderer/sourceRevealMask";
 
 interface ExportPngArgs {
   grid: RenderGrid;
   font: FontSettings;
   ascii: AsciiSettings;
   color: ColorSettings;
+  mask: MaskSettings;
   animation?: AnimationSettings;
   exportOptions: ExportOptions;
   scale: number;
@@ -160,7 +170,7 @@ export const createCanvasPngBlob = (canvas: HTMLCanvasElement, dpi?: number) =>
     }
   }).then((blob) => (typeof dpi === "number" ? applyPngDpi(blob, dpi) : blob));
 
-export const createPngBlob = async ({ grid, font, ascii, color, animation, exportOptions, scale, dpi }: RenderPngArgs) => {
+export const createPngBlob = async ({ grid, font, ascii, color, mask, animation, exportOptions, scale, dpi }: RenderPngArgs) => {
   const renderFont = scaleFontForRenderResolution(font, ascii.renderResolution);
   const exportFont: FontSettings = {
     ...renderFont,
@@ -194,11 +204,13 @@ export const createPngBlob = async ({ grid, font, ascii, color, animation, expor
     font: exportFont,
     ascii,
     color,
+    mask,
+    animation,
     transitionAccent: animation,
     exportOptions,
     scale: 1
   });
-  if (shouldForceStrictDuotonePixels({ color, animation, font })) {
+  if (!isSourceRevealMaskActive(mask) && shouldForceStrictDuotonePixels({ color, animation, font })) {
     forceStrictDuotoneCanvas(canvas, color, exportOptions);
   }
 

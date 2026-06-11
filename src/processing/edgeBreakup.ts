@@ -303,6 +303,9 @@ export const applyEdgeBreakup = (cells: CellRenderData[], options: WorkerRenderO
         target.sourceR = source.sourceR;
         target.sourceG = source.sourceG;
         target.sourceB = source.sourceB;
+        target.sourceInverted = source.sourceInverted;
+        target.sourceExposure = source.sourceExposure;
+        target.sourceTone = source.sourceTone;
         target.foregroundAlpha = Math.max(
           0.12,
           particleFade * (0.42 + edgeStrength * 0.54) * (0.6 + chunkWeight * 0.4)
@@ -353,6 +356,9 @@ export const applyEdgeBreakup = (cells: CellRenderData[], options: WorkerRenderO
       target.sourceR = cell.sourceR;
       target.sourceG = cell.sourceG;
       target.sourceB = cell.sourceB;
+      target.sourceInverted = cell.sourceInverted;
+      target.sourceExposure = cell.sourceExposure;
+      target.sourceTone = cell.sourceTone;
       target.foregroundAlpha = Math.max(0.06, particleFade * (0.28 + edgeStrength * 0.58) * (0.58 + field * 0.42));
       target.backgroundAlpha = 0;
       target.isParticle = true;

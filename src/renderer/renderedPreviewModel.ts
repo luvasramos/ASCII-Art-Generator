@@ -7,6 +7,7 @@ import type {
   FontSettings,
   FrameSettings,
   ImageSettings,
+  MaskSettings,
   AnimationPreviewFormat,
   RenderedPreviewCachedFramePlaceholder,
   RenderedPreviewQuality,
@@ -28,6 +29,7 @@ export interface RenderedPreviewCacheKeyInput {
   image: ImageSettings;
   frame: FrameSettings;
   breakup: BreakupSettings;
+  mask: MaskSettings;
   color: ColorSettings;
   exportOptions: ExportOptions;
   exportScale: number;
@@ -212,8 +214,19 @@ const hashString = (value: string) => {
   return (hash >>> 0).toString(16).padStart(8, "0");
 };
 
+const getRenderRelevantColorSettings = (color: ColorSettings) => {
+  const { duotoneThreshold, ...renderColor } = color;
+  void duotoneThreshold;
+  return renderColor;
+};
+
 export const createRenderedPreviewCacheKey = (input: RenderedPreviewCacheKeyInput) =>
-  `rendered-preview:${hashString(stableStringify(input))}`;
+  `rendered-preview:${hashString(
+    stableStringify({
+      ...input,
+      color: getRenderRelevantColorSettings(input.color)
+    })
+  )}`;
 
 export const createRenderedPreviewCancelHandle = (
   id = `rendered-preview-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`

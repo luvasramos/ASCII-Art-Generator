@@ -24,6 +24,7 @@ import type {
   FrameSettings,
   GlyphMetric,
   ImageSettings,
+  MaskSettings,
   AnimationPreviewFormat,
   RenderedPreviewQuality
 } from "./types";
@@ -36,6 +37,7 @@ interface RenderedAnimationPreviewArgs {
   image: ImageSettings;
   frame: FrameSettings;
   breakup: BreakupSettings;
+  mask: MaskSettings;
   color: ColorSettings;
   exportOptions: ExportOptions;
   exportScale: number;
@@ -129,6 +131,7 @@ export const createRenderedAnimationPreviewCacheKey = ({
   image,
   frame,
   breakup,
+  mask,
   color,
   exportOptions,
   exportScale,
@@ -144,6 +147,7 @@ export const createRenderedAnimationPreviewCacheKey = ({
     image,
     frame,
     breakup,
+    mask,
     color,
     exportOptions,
     exportScale: resolveRenderedPreviewScale(exportScale, quality),
@@ -244,6 +248,7 @@ export const generateRenderedAnimationPreview = async ({
   image,
   frame,
   breakup,
+  mask,
   color,
   exportOptions,
   exportScale,
@@ -273,6 +278,7 @@ export const generateRenderedAnimationPreview = async ({
     image,
     frame,
     breakup,
+    mask,
     color,
     exportOptions,
     exportScale,
@@ -297,6 +303,7 @@ export const generateRenderedAnimationPreview = async ({
       image,
       frame,
       breakup,
+      mask,
       color,
       exportOptions,
       exportScale: previewScale,

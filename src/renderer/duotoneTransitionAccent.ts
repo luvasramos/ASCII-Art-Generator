@@ -70,25 +70,23 @@ export const shouldUseStaticDuotoneTransitionAccent = (
   return shouldUseDeterministicDuotoneAccent(cell, animation?.matrixTransitionAmount ?? 0, ascii, 977);
 };
 
+export const isHintsOfColorEnabled = (color: ColorSettings, animation?: AnimationSettings) =>
+  hintsOfColorCanRender(color, animation);
+
 export const isDuotoneHitsOfColorEnabled = (color: ColorSettings, animation?: AnimationSettings) =>
-  Boolean(
-    color.paletteMode === "single" &&
-      hintsOfColorCanRender(color, animation)
-  );
+  Boolean(color.paletteMode === "single" && isHintsOfColorEnabled(color, animation));
 
-export const resolveDuotoneHitsOfColor = (color: ColorSettings) =>
-  color.invert ? invertCssColor(color.hitsOfColor.color) : color.hitsOfColor.color;
+export const resolveHintsOfColor = (color: ColorSettings) => color.hitsOfColor.color;
 
-export const shouldUseStaticDuotoneHitColor = (
+export const resolveDuotoneHitsOfColor = resolveHintsOfColor;
+
+const shouldUseDeterministicHintColor = (
   cell: CellRenderData,
   color: ColorSettings,
   ascii: AsciiSettings,
   animation?: AnimationSettings,
   animationTimeSeconds?: number
 ) => {
-  if (!isDuotoneHitsOfColorEnabled(color, animation)) {
-    return false;
-  }
   const hitSeed = Number.isFinite(color.hitsOfColor.seed) ? color.hitsOfColor.seed : 1337;
   const amount = resolveHintsOfColorAmount(color, animation, animationTimeSeconds);
   if (amount <= 0) {
@@ -102,4 +100,30 @@ export const shouldUseStaticDuotoneHitColor = (
     bucket === null ? 421 : 421 + bucket * 37,
     hitSeed
   );
+};
+
+export const shouldUseHintColor = (
+  cell: CellRenderData,
+  color: ColorSettings,
+  ascii: AsciiSettings,
+  animation?: AnimationSettings,
+  animationTimeSeconds?: number
+) => {
+  if (!isHintsOfColorEnabled(color, animation)) {
+    return false;
+  }
+  return shouldUseDeterministicHintColor(cell, color, ascii, animation, animationTimeSeconds);
+};
+
+export const shouldUseStaticDuotoneHitColor = (
+  cell: CellRenderData,
+  color: ColorSettings,
+  ascii: AsciiSettings,
+  animation?: AnimationSettings,
+  animationTimeSeconds?: number
+) => {
+  if (!isDuotoneHitsOfColorEnabled(color, animation)) {
+    return false;
+  }
+  return shouldUseDeterministicHintColor(cell, color, ascii, animation, animationTimeSeconds);
 };

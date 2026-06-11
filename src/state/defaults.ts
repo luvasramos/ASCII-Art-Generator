@@ -6,7 +6,8 @@ import type {
   ExportOptions,
   FontSettings,
   FrameSettings,
-  ImageSettings
+  ImageSettings,
+  MaskSettings
 } from "../renderer/types";
 import { defaultCharacterPreset } from "../presets/characterPresets";
 
@@ -44,6 +45,8 @@ export const defaultImageSettings: ImageSettings = {
   brightness: 0,
   contrast: 1.12,
   exposure: 0,
+  saturation: 0,
+  hue: 0,
   shadows: 0,
   shadowsRange: 45,
   midtones: 0,
@@ -113,6 +116,16 @@ export const defaultBreakupSettings: BreakupSettings = {
   seed: 1337
 };
 
+export const defaultMaskSettings: MaskSettings = {
+  enabled: false,
+  mix: 60,
+  cloudSize: 45,
+  softness: 55,
+  contrast: 45,
+  invert: false,
+  seed: 1337
+};
+
 export const defaultAnimationSettings: AnimationSettings = {
   enabled: false,
   type: "wave",
@@ -127,7 +140,7 @@ export const defaultAnimationSettings: AnimationSettings = {
   matrixLoopStyle: "pingpong",
   matrixTransitionColorEnabled: false,
   matrixTransitionColor: "#7CFF9B",
-  matrixTransitionAmount: 15,
+  matrixTransitionAmount: 0,
   spinRotationsPerLoop: 1,
   spinDirection: "clockwise",
   ambientDirection: "circular",

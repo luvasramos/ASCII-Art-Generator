@@ -9,7 +9,8 @@ import type {
   FontSettings,
   FrameSettings,
   GlyphMetric,
-  ImageSettings
+  ImageSettings,
+  MaskSettings
 } from "../renderer/types";
 import type {
   RenderedPreviewCache,
@@ -17,19 +18,20 @@ import type {
 } from "../renderer/renderedPreviewModel";
 import { resolveAnimationFrameCount } from "../renderer/animationTiming";
 import { forceStrictDuotoneCanvas, shouldForceStrictDuotonePixels } from "../renderer/strictDuotone";
+import { isSourceRevealMaskActive } from "../renderer/sourceRevealMask";
 import { cachedAnimationFrameMatches, renderCachedAnimationFrames } from "./cachedAnimationFrames";
 import { downloadBlob } from "./download";
+import {
+  getSupportedVideoFormat,
+  isVideoMimeTypeSupported,
+  videoMimeTypesToTest,
+  type VideoExportExtension
+} from "./exportCapabilities";
 import { formatBitrate, resolveAnimatedExportFps, resolveVideoEncodingSettings } from "./exportQuality";
 import { collectMp4RuntimeDiagnostics, encodePngSequenceToMp4 } from "./ffmpegMp4";
 import { renderAsciiAnimationFrames } from "./renderAnimationFrames";
 
-export type VideoExportExtension = "mp4" | "webm";
-
-interface VideoExportFormat {
-  mimeType: string;
-  extension: VideoExportExtension;
-  label: string;
-}
+export type { VideoExportExtension } from "./exportCapabilities";
 
 interface SharedAsciiVideoArgs {
   sourceName: string;
@@ -39,6 +41,7 @@ interface SharedAsciiVideoArgs {
   frame: FrameSettings;
   breakup: BreakupSettings;
   color: ColorSettings;
+  mask: MaskSettings;
   exportOptions: ExportOptions;
   exportScale: number;
   glyphMetrics: GlyphMetric[];
@@ -76,17 +79,6 @@ interface ExportAsciiVideoResult {
   usedFallback: boolean;
   timingWarning?: string;
 }
-
-const videoFormats: VideoExportFormat[] = [
-  { mimeType: "video/mp4;codecs=avc1.42E01E", extension: "mp4", label: "MP4 H.264" },
-  { mimeType: "video/mp4;codecs=h264", extension: "mp4", label: "MP4 H.264" },
-  { mimeType: "video/mp4", extension: "mp4", label: "MP4" },
-  { mimeType: "video/webm;codecs=vp9", extension: "webm", label: "WebM VP9" },
-  { mimeType: "video/webm;codecs=vp8", extension: "webm", label: "WebM VP8" },
-  { mimeType: "video/webm", extension: "webm", label: "WebM" }
-];
-
-const videoMimeTypesToTest = videoFormats.map((format) => format.mimeType);
 
 const createAbortError = () => {
   const error = new Error("Video export canceled.");
@@ -161,21 +153,6 @@ const waitForVideoReady = (video: HTMLVideoElement) =>
     video.load();
   });
 
-const getSupportedVideoFormat = (
-  preferredExtension: VideoExportExtension = "webm",
-  allowFormatFallback = true
-) => {
-  if (typeof MediaRecorder === "undefined") {
-    return null;
-  }
-  const preferred = videoFormats.filter((format) => format.extension === preferredExtension);
-  if (!allowFormatFallback) {
-    return preferred.find((format) => MediaRecorder.isTypeSupported(format.mimeType)) ?? null;
-  }
-  const fallback = videoFormats.filter((format) => format.extension !== preferredExtension);
-  return [...preferred, ...fallback].find((format) => MediaRecorder.isTypeSupported(format.mimeType)) ?? null;
-};
-
 const buildVideoFileName = (sourceName: string, suffix: string, extension: VideoExportExtension) => {
   const base = sourceName.replace(/\.[a-z0-9]+$/i, "").replace(/[^a-z0-9-_]+/gi, "-").toLowerCase();
   return `${base || "ascii-video"}-${suffix}.${extension}`;
@@ -189,7 +166,7 @@ const collectRecorderDiagnostics = () => ({
   mediaRecorderAvailable: typeof MediaRecorder !== "undefined",
   testedMimeTypes: videoMimeTypesToTest.map((mimeType) => ({
     mimeType,
-    supported: typeof MediaRecorder !== "undefined" ? MediaRecorder.isTypeSupported(mimeType) : false
+    supported: isVideoMimeTypeSupported(mimeType)
   }))
 });
 
@@ -317,6 +294,7 @@ export const exportAsciiFrameSequence = async ({
   frame,
   breakup,
   color,
+  mask,
   exportOptions,
   exportScale,
   glyphMetrics,
@@ -340,7 +318,7 @@ export const exportAsciiFrameSequence = async ({
   const normalizedFps = resolveAnimatedExportFps(fps, exportQuality, animation?.type);
   const totalFrames = resolveAnimationFrameCount(duration, normalizedFps);
   const useCachedFrames = cachedAnimationFrameMatches(cachedFrames, normalizedFps, totalFrames);
-  const strictDuotonePixelGuard = shouldForceStrictDuotonePixels({ color, animation, font });
+  const strictDuotonePixelGuard = !isSourceRevealMaskActive(mask) && shouldForceStrictDuotonePixels({ color, animation, font });
   const enforceStrictDuotoneFrame = (canvas: HTMLCanvasElement) => {
     if (strictDuotonePixelGuard) {
       forceStrictDuotoneCanvas(canvas, color, exportOptions);
@@ -370,6 +348,7 @@ export const exportAsciiFrameSequence = async ({
           frame,
           breakup,
           color,
+          mask,
           exportOptions,
           exportScale,
           glyphMetrics,
@@ -507,6 +486,7 @@ export const exportAsciiFrameSequence = async ({
           frame,
           breakup,
           color,
+          mask,
           exportOptions,
           exportScale,
           glyphMetrics,
@@ -648,6 +628,7 @@ export const exportAsciiFrameSequence = async ({
               frame,
               breakup,
               color,
+              mask,
               exportOptions,
               exportScale,
               glyphMetrics,

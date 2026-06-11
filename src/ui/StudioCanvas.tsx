@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { motion } from "framer-motion";
 import { ArrowLeft, Maximize2, Minus, Pause, Play, Plus, Redo2, RotateCcw, Undo2, X } from "lucide-react";
 import { createGlyphAtlas } from "../atlas/glyphAtlas";
@@ -6,7 +6,9 @@ import { createImageGlyphAtlas, type ImageGlyphAtlas } from "../atlas/imageGlyph
 import { normalizeCharacterSet } from "../ascii/charset";
 import { getTonalRangeWeight } from "../luminance/adjustments";
 import type { AnimatedImageRenderer } from "../processing/animateImage";
+import { resolveVideoProceduralAnimation } from "../renderer/animationEffects";
 import { renderAsciiLayers } from "../renderer/layeredCanvasRenderer";
+import { createSourceRevealMaskResolver } from "../renderer/sourceRevealMask";
 import { scaleFontForRenderResolution } from "../renderer/geometry";
 import { normalizeAnimationFps } from "../renderer/animationTiming";
 import {
@@ -28,6 +30,7 @@ import type {
   GlyphMetric,
   ImageSettings,
   LivePreviewOptimizationLevel,
+  MaskSettings,
   RenderGrid,
   RenderedPreviewState,
   ToneRangePreview,
@@ -43,6 +46,7 @@ interface StudioCanvasProps {
   font: FontSettings;
   ascii: AsciiSettings;
   color: ColorSettings;
+  mask: MaskSettings;
   exportOptions: ExportOptions;
   exportScale: number;
   image: ImageSettings;
@@ -62,6 +66,8 @@ interface StudioCanvasProps {
   animateStillImageActive: boolean;
   onAnimationPerformanceWarning: (message: string) => void;
   toneRangePreview: ToneRangePreview | null;
+  maskPreviewVisible: boolean;
+  onClearToneRangePreview: () => void;
   visualEditPreview: VisualEditPreviewState;
 }
 
@@ -291,6 +297,7 @@ export const StudioCanvas = ({
   font,
   ascii,
   color,
+  mask,
   exportOptions,
   exportScale,
   image,
@@ -310,12 +317,15 @@ export const StudioCanvas = ({
   animateStillImageActive,
   onAnimationPerformanceWarning,
   toneRangePreview,
+  maskPreviewVisible,
+  onClearToneRangePreview,
   visualEditPreview
 }: StudioCanvasProps) => {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const backgroundCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const glyphCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const tonePreviewCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const maskPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const renderedPreviewCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const renderedPreviewMediaKeyRef = useRef(mediaKey);
   const autoFitRef = useRef<{
@@ -349,10 +359,20 @@ export const StudioCanvas = ({
     failRenderedPreviewRender
   } = useStudioStore();
   const canPreviewAnimation = animateStillImageActive && Boolean(animatedImageRenderer) && Boolean(grid);
+  const staticRenderAnimation = useMemo(
+    () => (videoPlayback.isVideo ? resolveVideoProceduralAnimation(animation, color) : animation),
+    [animation, color, videoPlayback.isVideo]
+  );
+  const staticRenderAnimationTimeSeconds = videoPlayback.isVideo ? videoPlayback.currentTime : undefined;
   const renderedPreviewProgress = Math.min(1, Math.max(0, renderedPreview.progress));
   const renderedPreviewFrameCount = Math.max(0, renderedPreview.frameCount);
   const renderedPreviewRenderedFrames = getRenderedPreviewCompletedFrameCount(renderedPreview);
   const renderedPreviewCache = getRenderedPreviewCache(renderedPreview.cacheKey);
+  const videoScrubDuration = Math.max(0.001, videoPlayback.duration);
+  const videoScrubValue = Math.min(videoPlayback.currentTime, videoScrubDuration);
+  const videoScrubFill =
+    videoPlayback.duration > 0 ? Math.min(100, Math.max(0, (videoPlayback.currentTime / videoPlayback.duration) * 100)) : 0;
+  const videoScrubStyle = { "--slider-fill": `${videoScrubFill}%` } as CSSProperties;
   const renderedPreviewCanUseCache =
     Boolean(renderedPreview.cacheKey) &&
     Boolean(renderedPreviewCache) &&
@@ -500,6 +520,7 @@ export const StudioCanvas = ({
     image,
     frame,
     breakup,
+    mask,
     color,
     exportOptions,
     exportScale,
@@ -519,6 +540,7 @@ export const StudioCanvas = ({
   });
 
   const startRenderedPreview = useCallback(async () => {
+    onClearToneRangePreview();
     stopRenderedPreview();
     cancelRenderedPreviewRender();
     clearRenderedPreviewCache();
@@ -550,6 +572,7 @@ export const StudioCanvas = ({
     clearRenderedPreviewCache,
     failRenderedPreviewRender,
     generateRenderedPreview,
+    onClearToneRangePreview,
     playRenderedPreview,
     setAnimationPreviewMode,
     setLivePreviewPlaying,
@@ -822,9 +845,12 @@ export const StudioCanvas = ({
       imageGlyphAtlas,
       font,
       ascii,
+      mask,
       color,
       exportOptions: finalQualityStaticPreviewActive ? exportOptions : undefined,
-      transitionAccent: animation
+      animation: staticRenderAnimation,
+      animationTimeSeconds: staticRenderAnimationTimeSeconds,
+      transitionAccent: staticRenderAnimation
     });
     backgroundCanvasRef.current.style.width = `${Math.max(1, Math.round(visibleCanvasWidth))}px`;
     backgroundCanvasRef.current.style.height = `${Math.max(1, Math.round(visibleCanvasHeight))}px`;
@@ -835,7 +861,9 @@ export const StudioCanvas = ({
     ascii,
     atlas,
     color,
-    animation,
+    mask,
+    staticRenderAnimation,
+    staticRenderAnimationTimeSeconds,
     font,
     grid,
     imageGlyphAtlas,
@@ -866,6 +894,7 @@ export const StudioCanvas = ({
     frame,
     breakup,
     color,
+    mask,
     animation,
     optimizationLevel: livePreviewOptimizationLevel,
     glyphMetrics,
@@ -922,7 +951,7 @@ export const StudioCanvas = ({
       if (cell.alpha <= 0.01 || cell.coverage <= 0.01) {
         continue;
       }
-      const tonalLuminance = image.invertTone ? 1 - cell.luminance : cell.luminance;
+      const tonalLuminance = cell.luminance;
       const weight = getTonalRangeWeight(tonalLuminance, toneRangePreview, image);
       if (weight <= 0.004) {
         continue;
@@ -946,6 +975,85 @@ export const StudioCanvas = ({
     grid,
     image,
     toneRangePreview,
+    visibleCanvasHeight,
+    visibleCanvasWidth
+  ]);
+
+  useEffect(() => {
+    const canvas = maskPreviewCanvasRef.current;
+    if (!canvas) {
+      return;
+    }
+
+    const renderWidth = Math.max(1, Math.round(grid?.width ?? visibleCanvasWidth));
+    const renderHeight = Math.max(1, Math.round(grid?.height ?? visibleCanvasHeight));
+    const displayWidth = Math.max(1, Math.round(visibleCanvasWidth));
+    const displayHeight = Math.max(1, Math.round(visibleCanvasHeight));
+    if (canvas.width !== renderWidth) {
+      canvas.width = renderWidth;
+    }
+    if (canvas.height !== renderHeight) {
+      canvas.height = renderHeight;
+    }
+    canvas.style.width = `${displayWidth}px`;
+    canvas.style.height = `${displayHeight}px`;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      return;
+    }
+
+    ctx.clearRect(0, 0, renderWidth, renderHeight);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
+
+    if (!grid || !maskPreviewVisible || inlineFinalPreviewActive) {
+      return;
+    }
+
+    const maskResolver = createSourceRevealMaskResolver(grid, mask);
+    if (!maskResolver.active) {
+      return;
+    }
+
+    const stepX = grid.cellWidth + grid.gapX;
+    const stepY = grid.cellHeight + grid.gapY;
+    const baseCellWidth = grid.gapX > 0 ? grid.cellWidth : grid.cellWidth + 0.5;
+    const baseCellHeight = grid.gapY > 0 ? grid.cellHeight : grid.cellHeight + 0.5;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, renderWidth, renderHeight);
+    ctx.clip();
+    ctx.fillStyle = "rgba(0, 0, 0, 0.42)";
+    ctx.fillRect(0, 0, renderWidth, renderHeight);
+    ctx.fillStyle = "#ffffff";
+
+    for (let cellIndex = 0; cellIndex < grid.cells.length; cellIndex += 1) {
+      const cell = grid.cells[cellIndex];
+      const reveal = maskResolver.resolve(cell, cellIndex);
+      if (reveal <= 0.004) {
+        continue;
+      }
+      const x = grid.gapX > 0 ? cell.x * stepX : Math.round(cell.x * stepX);
+      const y = grid.gapY > 0 ? cell.y * stepY : Math.round(cell.y * stepY);
+      const cellWidth = grid.gapX > 0 ? baseCellWidth : Math.ceil(baseCellWidth);
+      const cellHeight = grid.gapY > 0 ? baseCellHeight : Math.ceil(baseCellHeight);
+      const drawWidth = Math.max(0, Math.min(cellWidth, renderWidth - x));
+      const drawHeight = Math.max(0, Math.min(cellHeight, renderHeight - y));
+      if (drawWidth <= 0 || drawHeight <= 0) {
+        continue;
+      }
+      ctx.globalAlpha = Math.min(0.88, reveal * 0.88);
+      ctx.fillRect(x, y, drawWidth, drawHeight);
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+  }, [
+    grid,
+    inlineFinalPreviewActive,
+    mask,
+    maskPreviewVisible,
     visibleCanvasHeight,
     visibleCanvasWidth
   ]);
@@ -1110,21 +1218,35 @@ export const StudioCanvas = ({
         </div>
 
         {videoPlayback.isVideo && (
-          <div className="pointer-events-auto absolute inset-x-8 top-6 z-20 mx-auto flex max-w-3xl items-center gap-3 rounded-2xl border border-white/[0.06] bg-panel p-2">
-            <IconButton title={videoPlayback.isPlaying ? "Pause video" : "Play video"} onClick={onToggleVideoPlayback}>
-              {videoPlayback.isPlaying ? <Pause size={16} /> : <Play size={16} />}
-            </IconButton>
-            <input
-              className="h-5 min-w-0 flex-1 cursor-pointer"
-              type="range"
-              min={0}
-              max={Math.max(0.001, videoPlayback.duration)}
-              step={0.01}
-              value={Math.min(videoPlayback.currentTime, Math.max(0.001, videoPlayback.duration))}
-              onChange={(event) => onVideoSeek(Number(event.target.value))}
-            />
-            <div className="min-w-28 text-right text-xs tabular-nums text-zinc-400">
-              {formatTime(videoPlayback.currentTime)} / {formatTime(videoPlayback.duration)}
+          <div className="pointer-events-none absolute inset-x-4 bottom-6 z-20 flex justify-center">
+            <div
+              className="pointer-events-auto flex w-full max-w-3xl flex-col gap-2 rounded-2xl border border-white/[0.06] bg-panel/95 p-2 shadow-2xl backdrop-blur"
+              onPointerDown={(event) => event.stopPropagation()}
+              onWheel={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-center gap-3">
+                <IconButton title={videoPlayback.isPlaying ? "Pause video" : "Play video"} onClick={onToggleVideoPlayback}>
+                  {videoPlayback.isPlaying ? <Pause size={16} /> : <Play size={16} />}
+                </IconButton>
+                <input
+                  className="video-timeline-range h-5 min-w-0 flex-1 cursor-pointer"
+                  type="range"
+                  min={0}
+                  max={videoScrubDuration}
+                  step={0.01}
+                  value={videoScrubValue}
+                  style={videoScrubStyle}
+                  onChange={(event) => onVideoSeek(Number(event.target.value))}
+                />
+                <div className="min-w-28 text-right text-xs tabular-nums text-zinc-400">
+                  {formatTime(videoPlayback.currentTime)} / {formatTime(videoPlayback.duration)}
+                </div>
+              </div>
+              {videoPlayback.environmentWarning && (
+                <div className="px-1 pb-0.5 text-center text-[11px] leading-4 text-zinc-500">
+                  {videoPlayback.environmentWarning}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -1172,6 +1294,12 @@ export const StudioCanvas = ({
               ref={tonePreviewCanvasRef}
               className={`pointer-events-none absolute inset-0 ${
                 toneRangePreview && !inlineFinalPreviewActive ? "" : "hidden"
+              }`}
+            />
+            <canvas
+              ref={maskPreviewCanvasRef}
+              className={`pointer-events-none absolute inset-0 transition-opacity duration-150 ${
+                maskPreviewVisible && !inlineFinalPreviewActive ? "opacity-100" : "hidden opacity-0"
               }`}
             />
             <canvas

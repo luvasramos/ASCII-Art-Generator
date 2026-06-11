@@ -6,7 +6,10 @@ import type {
   ExportOptions,
   FontSettings,
   GlyphMetric,
-  RenderGrid
+  MaskSettings,
+  RenderGrid,
+  SourceLayerData,
+  SourceRevealMaskMode
 } from "./types";
 import type { GlyphAtlas } from "../atlas/glyphAtlas";
 import { getImageGlyphIndexForBrightness, type ImageGlyphAtlas } from "../atlas/imageGlyphAtlas";
@@ -21,11 +24,12 @@ import { resolveRenderAnimationState } from "./animationEffects";
 import type { ImageGlyphAtlasEntry } from "../atlas/imageGlyphAtlas";
 import { createImageGlyphBrightnessMapper } from "./imageGlyphDistribution";
 import {
-  resolveDuotoneHitsOfColor,
+  resolveHintsOfColor,
   resolveDuotoneTransitionColor,
-  shouldUseStaticDuotoneHitColor
+  shouldUseHintColor
 } from "./duotoneTransitionAccent";
-import { matrixTransitionColorCanRender } from "./strictDuotone";
+import { matrixTransitionColorCanRenderForColor } from "./strictDuotone";
+import { createSourceRevealMaskResolver } from "./sourceRevealMask";
 
 interface LayerRenderArgs {
   backgroundCanvas: HTMLCanvasElement;
@@ -36,6 +40,7 @@ interface LayerRenderArgs {
   font: FontSettings;
   ascii: AsciiSettings;
   color: ColorSettings;
+  mask?: MaskSettings;
   exportOptions?: ExportOptions;
   animation?: AnimationSettings;
   transitionAccent?: AnimationSettings;
@@ -59,6 +64,141 @@ const quantizeBrightness = (value: number) => Math.round(Math.min(1, Math.max(0,
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
 
 const clampByte = (value: number) => Math.min(255, Math.max(0, Math.round(value)));
+
+const cellSourceColor = (cell: CellRenderData) =>
+  `rgb(${clampByte(cell.sourceR)}, ${clampByte(cell.sourceG)}, ${clampByte(cell.sourceB)})`;
+
+const resolveAsciiMaskMultiplier = (reveal: number) => 1 - clamp01(reveal);
+
+const sourceImageCanvasCache = new WeakMap<ImageData, HTMLCanvasElement>();
+let sourceRevealMaskCanvas: HTMLCanvasElement | null = null;
+let sourceRevealCompositeCanvas: HTMLCanvasElement | null = null;
+
+const getReusableCanvas = (
+  current: HTMLCanvasElement | null,
+  width: number,
+  height: number
+) => {
+  const canvas = current ?? document.createElement("canvas");
+  const nextWidth = Math.max(1, Math.round(width));
+  const nextHeight = Math.max(1, Math.round(height));
+  if (canvas.width !== nextWidth) {
+    canvas.width = nextWidth;
+  }
+  if (canvas.height !== nextHeight) {
+    canvas.height = nextHeight;
+  }
+  return canvas;
+};
+
+const getSourceImageCanvas = (imageData: ImageData) => {
+  const cached = sourceImageCanvasCache.get(imageData);
+  if (cached) {
+    return cached;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, imageData.width);
+  canvas.height = Math.max(1, imageData.height);
+  const ctx = canvas.getContext("2d", { alpha: true });
+  if (ctx) {
+    ctx.putImageData(imageData, 0, 0);
+  }
+  sourceImageCanvasCache.set(imageData, canvas);
+  return canvas;
+};
+
+const drawAlignedSourceLayer = (
+  ctx: CanvasRenderingContext2D,
+  sourceLayer: SourceLayerData,
+  width: number,
+  height: number
+) => {
+  const sourceCanvas = getSourceImageCanvas(sourceLayer.imageData);
+  const frame = sourceLayer.samplingFrame;
+  const drawWidth = frame.fitWidth * width;
+  const drawHeight = frame.fitHeight * height;
+  if (
+    drawWidth <= 0.001 ||
+    drawHeight <= 0.001 ||
+    frame.sourceWidth <= 0.001 ||
+    frame.sourceHeight <= 0.001
+  ) {
+    return;
+  }
+
+  ctx.save();
+  ctx.translate((frame.fitX + frame.fitWidth / 2) * width, (frame.fitY + frame.fitHeight / 2) * height);
+  if (Math.abs(frame.rotationRadians) > 0.0001) {
+    ctx.rotate(frame.rotationRadians);
+  }
+  ctx.drawImage(
+    sourceCanvas,
+    frame.sourceX,
+    frame.sourceY,
+    frame.sourceWidth,
+    frame.sourceHeight,
+    -drawWidth / 2,
+    -drawHeight / 2,
+    drawWidth,
+    drawHeight
+  );
+  ctx.restore();
+};
+
+const createSourceRevealAlphaMaskCanvas = (
+  grid: RenderGrid,
+  revealMasks: Float32Array
+) => {
+  sourceRevealMaskCanvas = getReusableCanvas(sourceRevealMaskCanvas, grid.columns, grid.rows);
+  const maskCanvas = sourceRevealMaskCanvas;
+  const maskCtx = maskCanvas.getContext("2d", { alpha: true });
+  if (!maskCtx) {
+    return null;
+  }
+  const maskData = maskCtx.createImageData(maskCanvas.width, maskCanvas.height);
+  const cellCount = Math.min(revealMasks.length, grid.columns * grid.rows);
+  for (let index = 0; index < cellCount; index += 1) {
+    const alpha = clampByte(revealMasks[index] * 255);
+    const pixelIndex = index * 4;
+    maskData.data[pixelIndex] = 255;
+    maskData.data[pixelIndex + 1] = 255;
+    maskData.data[pixelIndex + 2] = 255;
+    maskData.data[pixelIndex + 3] = alpha;
+  }
+  maskCtx.putImageData(maskData, 0, 0);
+  return maskCanvas;
+};
+
+const drawFullSourceRevealLayer = (
+  targetCtx: CanvasRenderingContext2D,
+  grid: RenderGrid,
+  sourceLayer: SourceLayerData,
+  revealMasks: Float32Array,
+  width: number,
+  height: number
+) => {
+  const maskCanvas = createSourceRevealAlphaMaskCanvas(grid, revealMasks);
+  if (!maskCanvas) {
+    return;
+  }
+  sourceRevealCompositeCanvas = getReusableCanvas(sourceRevealCompositeCanvas, width, height);
+  const sourceCanvas = sourceRevealCompositeCanvas;
+  const sourceCtx = sourceCanvas.getContext("2d", { alpha: true });
+  if (!sourceCtx) {
+    return;
+  }
+  sourceCtx.clearRect(0, 0, width, height);
+  sourceCtx.imageSmoothingEnabled = true;
+  drawAlignedSourceLayer(sourceCtx, sourceLayer, width, height);
+  sourceCtx.globalCompositeOperation = "destination-in";
+  sourceCtx.imageSmoothingEnabled = false;
+  sourceCtx.drawImage(maskCanvas, 0, 0, width, height);
+  sourceCtx.globalCompositeOperation = "source-over";
+  targetCtx.save();
+  targetCtx.globalAlpha = 1;
+  targetCtx.drawImage(sourceCanvas, 0, 0);
+  targetCtx.restore();
+};
 
 const hash01 = (x: number, y: number, salt: number) => {
   const value = Math.sin((x + 1) * 127.1 + (y + 1) * 311.7 + salt * 74.7) * 43758.5453123;
@@ -231,13 +371,13 @@ const applyMatrixTransitionColor = (
 ) => {
   const strength = clamp01(cell.matrixTransition ?? 0);
   const accentSettings = transitionAccent ?? animation;
-  const transitionEnabled = matrixTransitionColorCanRender(accentSettings);
+  const transitionEnabled = matrixTransitionColorCanRenderForColor(accentSettings, color);
+  if (shouldUseHintColor(cell, color, ascii, animation, animationTimeSeconds)) {
+    return resolveHintsOfColor(color);
+  }
   if (duotoneMode) {
     if (transitionEnabled && strength > 0 && accentSettings) {
       return resolveDuotoneTransitionColor(accentSettings, color);
-    }
-    if (shouldUseStaticDuotoneHitColor(cell, color, ascii, animation, animationTimeSeconds)) {
-      return resolveDuotoneHitsOfColor(color);
     }
     return baseColor;
   }
@@ -289,6 +429,7 @@ export const renderAsciiLayers = ({
   font,
   ascii,
   color,
+  mask,
   exportOptions,
   animation,
   transitionAccent,
@@ -324,6 +465,11 @@ export const renderAsciiLayers = ({
   const alphaThreshold = (exportOptions?.alphaThreshold ?? 0) / 100;
   const sourceMatchMode = isSourceMatchMode(color);
   const sourceMatchCellBackground = sourceMatchMode && color.sourceMatchBackground === "cell-background";
+  const suppressSourceMatchCellBackground = sourceMatchMode && !sourceMatchCellBackground;
+  const maskResolver = createSourceRevealMaskResolver(renderGrid, mask);
+  const revealMasks = maskResolver.values;
+  const sourceRevealMode: SourceRevealMaskMode =
+    maskResolver.active && renderGrid.sourceLayer ? "fullSource" : "cellSource";
 
   if (!transparentBackground) {
     const baseBackground = duotoneMode
@@ -335,25 +481,44 @@ export const renderAsciiLayers = ({
   }
 
   // Transparent exports omit low-coverage cells so empty silhouettes stay alpha-clean.
-  for (const cell of renderGrid.cells) {
-    if (sourceMatchMode && !sourceMatchCellBackground) {
+  for (let cellIndex = 0; cellIndex < renderGrid.cells.length; cellIndex += 1) {
+    const cell = renderGrid.cells[cellIndex];
+    if (suppressSourceMatchCellBackground && !maskResolver.active) {
       continue;
     }
     if (transparentBackground && !cell.isParticle && cell.coverage < alphaThreshold) {
       continue;
     }
-    if (cell.backgroundAlpha <= 0) {
+    const revealMask = maskResolver.active ? maskResolver.resolve(cell, cellIndex) : 0;
+    const backgroundAlpha = suppressSourceMatchCellBackground
+      ? 0
+      : cell.backgroundAlpha * resolveAsciiMaskMultiplier(revealMask);
+    if (backgroundAlpha > 0 && (!duotoneMode || duotoneLayerVisible(backgroundAlpha, cell, 19))) {
+      const resolvedBackground = sourceMatchCellBackground
+        ? resolveDisplaySourceMatchColor(cell, color)
+        : resolveDisplayCellColor(
+            quantizeBrightness(cell.background),
+            color,
+            "background",
+            cell.sourceInverted,
+            cell.sourceExposure,
+            cell.sourceTone
+          );
+      const bg = duotoneMode ? resolvedBackground : scaleColorBrightness(resolvedBackground, animationState.brightnessMultiplier);
+      backgroundCtx.fillStyle = bg;
+      backgroundCtx.globalAlpha = duotoneMode ? 1 : backgroundAlpha;
+      backgroundCtx.fillRect(
+        grid.gapX > 0 ? cell.x * stepX : Math.round(cell.x * stepX),
+        grid.gapY > 0 ? cell.y * stepY : Math.round(cell.y * stepY),
+        grid.gapX > 0 ? backgroundCellWidth : Math.ceil(backgroundCellWidth),
+        grid.gapY > 0 ? backgroundCellHeight : Math.ceil(backgroundCellHeight)
+      );
+    }
+    if (revealMask <= 0 || sourceRevealMode === "fullSource") {
       continue;
     }
-    if (duotoneMode && !duotoneLayerVisible(cell.backgroundAlpha, cell, 19)) {
-      continue;
-    }
-    const resolvedBackground = sourceMatchCellBackground
-      ? resolveDisplaySourceMatchColor(cell, color)
-      : resolveDisplayCellColor(quantizeBrightness(cell.background), color, "background");
-    const bg = duotoneMode ? resolvedBackground : scaleColorBrightness(resolvedBackground, animationState.brightnessMultiplier);
-    backgroundCtx.fillStyle = bg;
-    backgroundCtx.globalAlpha = duotoneMode ? 1 : cell.backgroundAlpha;
+    backgroundCtx.fillStyle = cellSourceColor(cell);
+    backgroundCtx.globalAlpha = clamp01(revealMask * Math.min(1, cell.alpha * 1.2));
     backgroundCtx.fillRect(
       grid.gapX > 0 ? cell.x * stepX : Math.round(cell.x * stepX),
       grid.gapY > 0 ? cell.y * stepY : Math.round(cell.y * stepY),
@@ -362,6 +527,9 @@ export const renderAsciiLayers = ({
     );
   }
   backgroundCtx.globalAlpha = 1;
+  if (sourceRevealMode === "fullSource" && renderGrid.sourceLayer && revealMasks) {
+    drawFullSourceRevealLayer(backgroundCtx, renderGrid, renderGrid.sourceLayer, revealMasks, width, height);
+  }
 
   const imageGlyphMode = ascii.glyphMode === "images";
   const useImageGlyphs = imageGlyphMode && Boolean(imageGlyphAtlas?.glyphs.length && imageGlyphAtlas.glyphs.length >= 2);
@@ -370,7 +538,8 @@ export const renderAsciiLayers = ({
       ? createImageGlyphBrightnessMapper(renderGrid.cells, imageGlyphAtlas.glyphs.length, ascii.glyphOpacity)
       : null;
 
-  for (const cell of renderGrid.cells) {
+  for (let cellIndex = 0; cellIndex < renderGrid.cells.length; cellIndex += 1) {
+    const cell = renderGrid.cells[cellIndex];
     if (imageGlyphMode && !useImageGlyphs) {
       continue;
     }
@@ -383,7 +552,10 @@ export const renderAsciiLayers = ({
     if (cell.foregroundAlpha <= 0) {
       continue;
     }
-    const effectiveForegroundAlpha = clamp01(cell.foregroundAlpha * animationState.glyphAlphaMultiplier);
+    const revealMask = revealMasks ? revealMasks[cellIndex] : 0;
+    const effectiveForegroundAlpha = clamp01(
+      cell.foregroundAlpha * resolveAsciiMaskMultiplier(revealMask) * animationState.glyphAlphaMultiplier
+    );
     if (duotoneMode && !duotoneLayerVisible(effectiveForegroundAlpha, cell, 37)) {
       continue;
     }
@@ -399,7 +571,14 @@ export const renderAsciiLayers = ({
       imageGlyphMapper?.record(imageGlyphIndex);
       const resolvedGlyphColor = sourceMatchMode
         ? resolveDisplaySourceMatchColor(cell, color)
-        : resolveDisplayCellColor(quantizeBrightness(cell.foreground), color, "foreground");
+        : resolveDisplayCellColor(
+            quantizeBrightness(cell.foreground),
+            color,
+            "foreground",
+            cell.sourceInverted,
+            cell.sourceExposure,
+            cell.sourceTone
+          );
       const baseGlyphColor = duotoneMode
         ? resolvedGlyphColor
         : scaleColorBrightness(resolvedGlyphColor, animationState.brightnessMultiplier);
@@ -427,7 +606,14 @@ export const renderAsciiLayers = ({
     }
     const resolvedForeground = sourceMatchMode
       ? resolveDisplaySourceMatchColor(cell, color)
-      : resolveDisplayCellColor(quantizeBrightness(cell.foreground), color, "foreground");
+      : resolveDisplayCellColor(
+          quantizeBrightness(cell.foreground),
+          color,
+          "foreground",
+          cell.sourceInverted,
+          cell.sourceExposure,
+          cell.sourceTone
+        );
     const baseForeground = duotoneMode
       ? resolvedForeground
       : scaleColorBrightness(resolvedForeground, animationState.brightnessMultiplier);
@@ -476,6 +662,7 @@ export const renderAsciiToCanvas = ({
   font,
   ascii,
   color,
+  mask,
   scale,
   exportOptions,
   animation,
@@ -493,6 +680,7 @@ export const renderAsciiToCanvas = ({
     font,
     ascii,
     color,
+    mask,
     exportOptions,
     animation,
     transitionAccent,

@@ -1,86 +1,23 @@
 import type { ImageSettings, ToneRangePreview } from "../renderer/types";
+import { getSourceToneRangeWeight, resolveSourceToneSettings } from "../processing/sourcePixels";
 
 const clamp01 = (value: number) => Math.min(1, Math.max(0, value));
-
-const smoothstep = (edge0: number, edge1: number, value: number) => {
-  const t = clamp01((value - edge0) / Math.max(0.0001, edge1 - edge0));
-  return t * t * (3 - 2 * t);
-};
-
-const smootherstep = (edge0: number, edge1: number, value: number) => {
-  const t = clamp01((value - edge0) / Math.max(0.0001, edge1 - edge0));
-  return t * t * t * (t * (t * 6 - 15) + 10);
-};
-
-const bellMask = (value: number, center: number, radius: number) => {
-  const distance = Math.abs(value - center);
-  return 1 - smootherstep(radius * 0.45, radius, distance);
-};
-
-const mix = (from: number, to: number, amount: number) => from + (to - from) * amount;
-
-const percentRangeToLuminanceWidth = (range: number, min: number, max: number) =>
-  min + clamp01(range / 100) * (max - min);
-
-const tonalControlAmount = (control: number) => smoothstep(0, 1, Math.min(1, Math.abs(control) / 100));
-
-const applyRegionalPush = (value: number, control: number, weight: number) => {
-  const amount = tonalControlAmount(control);
-  const influence = clamp01(weight) * amount;
-  if (influence <= 0.0001) {
-    return value;
-  }
-
-  return mix(value, control > 0 ? 1 : 0, influence);
-};
 
 export const getTonalRangeWeight = (
   value: number,
   range: ToneRangePreview,
   settings: ImageSettings
-) => {
-  const luminance = clamp01(value);
-  const shadowRange = percentRangeToLuminanceWidth(settings.shadowsRange, 0.04, 0.82);
-  const midtoneRadius = percentRangeToLuminanceWidth(settings.midtonesRange, 0.04, 0.46);
-  const highlightRange = percentRangeToLuminanceWidth(settings.highlightsRange, 0.04, 0.82);
+) => getSourceToneRangeWeight(value, range, resolveSourceToneSettings(settings));
 
-  if (range === "shadows") {
-    return Math.pow(1 - smootherstep(shadowRange * 0.45, shadowRange, luminance), 1.05);
-  }
-
-  if (range === "midtones") {
-    return Math.pow(bellMask(luminance, 0.5, midtoneRadius), 1.05);
-  }
-
-  return Math.pow(
-    smootherstep(1 - highlightRange, 1 - highlightRange * 0.45, luminance),
-    1.05
-  );
-};
-
-export const applyAdvancedTonalRemap = (value: number, settings: ImageSettings) => {
-  let remapped = value;
-  const shadowWeight = getTonalRangeWeight(value, "shadows", settings);
-  const midtoneWeight = getTonalRangeWeight(value, "midtones", settings);
-  const highlightWeight = getTonalRangeWeight(value, "highlights", settings);
-
-  remapped = applyRegionalPush(remapped, settings.shadows, shadowWeight);
-  remapped = applyRegionalPush(remapped, settings.midtones, midtoneWeight);
-  remapped = applyRegionalPush(remapped, settings.highlights, highlightWeight);
-
-  return clamp01(remapped);
-};
+export const applyAdvancedTonalRemap = (value: number, _settings: ImageSettings) => clamp01(value);
 
 export const applyImageSettingsToLuminance = (raw: number, settings: ImageSettings) => {
   let value = raw;
 
   value = (value - settings.blackPoint) / Math.max(0.001, settings.whitePoint - settings.blackPoint);
   value = clamp01(value);
-  value *= Math.pow(2, settings.exposure);
-  value += settings.brightness;
   value = (value - 0.5) * settings.contrast + 0.5;
   value = clamp01(value);
-  value = applyAdvancedTonalRemap(value, settings);
 
   if (settings.threshold > 0) {
     const hard = value >= 0.5 ? 1 : 0;

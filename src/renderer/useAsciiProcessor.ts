@@ -7,6 +7,7 @@ import type {
   FrameSettings,
   GlyphMetric,
   ImageSettings,
+  MaskSettings,
   RenderGrid,
   WorkerRequest,
   WorkerResponse
@@ -14,6 +15,7 @@ import type {
 import { applyRenderResolutionToGeometry, getRenderResolutionScale, measureCellGeometry } from "./geometry";
 import { generateRenderGrid } from "../processing/renderGrid";
 import { getTargetAspectRatio } from "../presets/aspectRatios";
+import { isSourceRevealMaskActive } from "./sourceRevealMask";
 
 declare global {
   interface Window {
@@ -37,10 +39,11 @@ interface ProcessorArgs {
   frame: FrameSettings;
   breakup: BreakupSettings;
   color: ColorSettings;
+  mask: MaskSettings;
   glyphMetrics: GlyphMetric[];
 }
 
-export const useAsciiProcessor = ({ imageData, font, ascii, image, frame, breakup, color, glyphMetrics }: ProcessorArgs) => {
+export const useAsciiProcessor = ({ imageData, font, ascii, image, frame, breakup, color, mask, glyphMetrics }: ProcessorArgs) => {
   const workerRef = useRef<Worker | null>(null);
   const requestIdRef = useRef(0);
   const [grid, setGrid] = useState<RenderGrid | null>(null);
@@ -132,7 +135,8 @@ export const useAsciiProcessor = ({ imageData, font, ascii, image, frame, breaku
         breakup,
         ascii,
         color,
-        glyphMetrics
+        glyphMetrics,
+        includeSourceLayer: isSourceRevealMaskActive(mask)
       }
     };
 
@@ -221,7 +225,7 @@ export const useAsciiProcessor = ({ imageData, font, ascii, image, frame, breaku
       worker.removeEventListener("error", handleWorkerFailure);
       worker.removeEventListener("messageerror", handleWorkerFailure);
     };
-  }, [ascii, breakup, color, font, frame, glyphMetrics, image, imageData]);
+  }, [ascii, breakup, color, font, frame, glyphMetrics, image, imageData, mask]);
 
   return {
     grid,

@@ -8,6 +8,10 @@ import {
   resolveAnimatedExportFps,
   resolveAnimatedExportProfile
 } from "../export/exportQuality";
+import {
+  collectVideoExportCapabilities,
+  getMp4UnavailableReason
+} from "../export/exportCapabilities";
 import { getFinalPreviewCacheCompatibility } from "../export/finalPreviewCacheCompatibility";
 import { getRenderedPreviewCache } from "../renderer/useRenderedAnimationPreview";
 import { defaultExportOptions } from "../state/defaults";
@@ -178,6 +182,27 @@ export const TopLeftActions = ({
     allowTransparentVideo: !selectedAnimatedVideoExport
   });
   const finalPreviewCacheReusable = showAnimationExports && finalPreviewCompatibility.reusable;
+  const videoExportCapabilities = collectVideoExportCapabilities();
+  const mp4UnavailableReason = fileType === "mp4" && selectedAnimatedVideoExport ? getMp4UnavailableReason() : null;
+  const webmUnavailableReason =
+    fileType === "webm" && selectedAnimatedVideoExport && !videoExportCapabilities.webmSupported
+      ? "WebM export requires MediaRecorder with WebM canvas recording support in this browser."
+      : null;
+  const selectedVideoFormatNote =
+    fileType === "webm" && selectedAnimatedVideoExport
+      ? videoExportCapabilities.supportedWebMFormat
+        ? `WebM is the best browser-native video export (${videoExportCapabilities.supportedWebMFormat.label}).`
+        : "WebM is the best browser-native video export when MediaRecorder supports it."
+      : fileType === "mp4" && selectedAnimatedVideoExport
+        ? "MP4 requires a local server or hosted site and bundled ffmpeg assets."
+        : fileType === "png-sequence" && selectedPngSequenceExport
+          ? "PNG sequence is the highest-quality fallback for complex renders."
+          : null;
+  const slowAnimatedExportWarning =
+    showAnimatedControls &&
+    animatedEstimate &&
+    (animatedEstimate.frames > 720 ||
+      (outputWidth !== null && outputHeight !== null && outputWidth * outputHeight > 1920 * 1080 * 4));
   const finalPreviewCacheMessage =
     showAnimationExports && selectedPreviewFormat
       ? finalPreviewCacheReusable
@@ -524,8 +549,15 @@ export const TopLeftActions = ({
                     <span className="tabular-nums text-zinc-300">{formatBytes(selectedEstimate)}</span>
                   </div>
                 )}
-                {(finalPreviewCacheMessage || gifPreviewNote) && (
+                {(selectedVideoFormatNote ||
+                  mp4UnavailableReason ||
+                  webmUnavailableReason ||
+                  finalPreviewCacheMessage ||
+                  gifPreviewNote) && (
                   <div className="mt-1 border-t border-white/[0.05] pt-1 text-zinc-500">
+                    {selectedVideoFormatNote && <div>{selectedVideoFormatNote}</div>}
+                    {mp4UnavailableReason && <div className="text-amber-100/80">{mp4UnavailableReason}</div>}
+                    {webmUnavailableReason && <div className="text-amber-100/80">{webmUnavailableReason}</div>}
                     {finalPreviewCacheMessage && (
                       <div className={finalPreviewCacheReusable ? "text-signal" : "text-zinc-500"}>
                         {finalPreviewCacheMessage}
@@ -541,6 +573,15 @@ export const TopLeftActions = ({
                   <span>
                     High-quality MP4 export can be slow in the browser. Keep the tab open and avoid switching apps.
                     WebM is faster.
+                  </span>
+                </div>
+              )}
+              {slowAnimatedExportWarning && !mp4HighResolutionWarning && (
+                <div className="flex gap-2 rounded-2xl border border-amber-300/15 bg-amber-300/[0.06] px-3 py-2 text-[11px] leading-5 text-amber-100/80">
+                  <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                  <span>
+                    Large or long animation exports can be slow in the browser. Keep the tab open and use PNG sequence
+                    if video encoding struggles.
                   </span>
                 </div>
               )}

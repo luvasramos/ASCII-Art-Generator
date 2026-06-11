@@ -3,9 +3,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import {
   ArrowDown,
+  ArrowLeft,
+  ArrowLeftRight,
+  ArrowRight,
   ArrowUp,
+  ArrowUpDown,
+  ArrowUpRight,
   ChevronDown,
   CircleDot,
+  Cloud,
+  Compass,
   Contrast,
   Crop,
   Download,
@@ -20,6 +27,7 @@ import {
   Play,
   Plus,
   RotateCcw,
+  RotateCw,
   Rotate3D,
   Ruler,
   Save,
@@ -45,6 +53,7 @@ import {
   defaultColorSettings,
   defaultFontSettings,
   defaultFrameSettings,
+  defaultMaskSettings,
   defaultImageSettings
 } from "../state/defaults";
 import { useStudioStore } from "../state/useStudioStore";
@@ -78,9 +87,13 @@ interface RightSidebarProps {
   sourcePaletteExtracting: boolean;
   onRefreshSourcePalette: () => void;
   canAnimateImage: boolean;
+  isVideoLoaded: boolean;
   stillImageMode: StillImageMode;
   onStillImageModeChange: (mode: StillImageMode) => void;
   onToneRangePreviewChange: (range: ToneRangePreview | null) => void;
+  onMaskPreviewStart: () => void;
+  onMaskPreviewEnd: () => void;
+  onMaskPreviewPulse: () => void;
   onVisualEditPreviewStart: (reason: string) => void;
   onVisualEditPreviewEnd: () => void;
   onVisualEditPreviewPulse: (reason: string) => void;
@@ -205,9 +218,51 @@ const colorPatchFromPalette = (customPalette: string[]) => ({
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 const exposureControlValue = (settings: { exposure: number; brightness: number }) =>
   clamp(settings.exposure + settings.brightness * 2, -2, 2);
-const blurControlValue = (settings: { blur: number }) => clamp((settings.blur / 16) * 100, 0, 100);
-const blurRadiusFromControl = (value: number) => (clamp(value, 0, 100) / 100) * 16;
-const defaultBlurControlValue = blurControlValue(defaultImageSettings);
+const blurSharpnessControlValue = (settings: { blur: number; sharpen: number }) => {
+  if (settings.sharpen > 0.0001) {
+    return clamp((settings.sharpen / 2.4) * 100, 0, 100);
+  }
+  return -clamp((settings.blur / 16) * 100, 0, 100);
+};
+const blurSharpnessPatchFromControl = (value: number) =>
+  value < 0
+    ? { blur: (Math.abs(clamp(value, -100, 0)) / 100) * 16, sharpen: 0 }
+    : { blur: 0, sharpen: (clamp(value, 0, 100) / 100) * 2.4 };
+const defaultBlurSharpnessControlValue = blurSharpnessControlValue(defaultImageSettings);
+const animationTypeOptions = [
+  { value: "spin", label: "360 Spin" },
+  { value: "ambient", label: "Ambient" },
+  { value: "breakup", label: "Breakup" },
+  { value: "fade", label: "Fade in/out" },
+  { value: "matrix", label: "Glyph Shuffle" },
+  { value: "scale", label: "Scale in" },
+  { value: "wave", label: "Wave" }
+];
+const waveDirectionOptions = [
+  { value: "horizontal", label: "Horizontal", icon: <ArrowLeftRight size={14} /> },
+  { value: "vertical", label: "Vertical", icon: <ArrowUpDown size={14} /> },
+  { value: "both", label: "Both", icon: <CircleDot size={14} /> }
+];
+const spinDirectionOptions = [
+  { value: "clockwise", label: "Clockwise", icon: <RotateCw size={14} /> },
+  { value: "counterclockwise", label: "Counterclockwise", icon: <RotateCcw size={14} /> }
+];
+const ambientDirectionOptions = [
+  { value: "vertical", label: "Vertical", icon: <ArrowUpDown size={14} /> },
+  { value: "horizontal", label: "Horizontal", icon: <ArrowLeftRight size={14} /> },
+  { value: "diagonal", label: "Diagonal", icon: <ArrowUpRight size={14} /> },
+  { value: "circular", label: "Circular", icon: <RotateCw size={14} /> },
+  { value: "angle", label: "Custom Angle", icon: <Compass size={14} /> }
+];
+const particleDirectionOptions = [
+  { value: "none", label: "None", icon: <Minus size={14} /> },
+  { value: "up", label: "Up", icon: <ArrowUp size={14} /> },
+  { value: "down", label: "Down", icon: <ArrowDown size={14} /> },
+  { value: "left", label: "Left", icon: <ArrowLeft size={14} /> },
+  { value: "right", label: "Right", icon: <ArrowRight size={14} /> },
+  { value: "radial", label: "Radial", icon: <CircleDot size={14} /> },
+  { value: "random", label: "Random", icon: <Shuffle size={14} /> }
+];
 const clampCanvasDimension = (value: number) => Math.round(clamp(value, 1, 12000));
 const aspectValueForId = (id: AspectRatioId) => {
   const preset = getAspectRatioPreset(id);
@@ -218,9 +273,13 @@ export const RightSidebar = ({
   grid,
   onFontFile,
   canAnimateImage,
+  isVideoLoaded,
   stillImageMode,
   onStillImageModeChange,
   onToneRangePreviewChange,
+  onMaskPreviewStart,
+  onMaskPreviewEnd,
+  onMaskPreviewPulse,
   onVisualEditPreviewStart,
   onVisualEditPreviewEnd,
   onVisualEditPreviewPulse
@@ -235,8 +294,6 @@ export const RightSidebar = ({
   const [settingsPresetName, setSettingsPresetName] = useState("");
   const [settingsPresetError, setSettingsPresetError] = useState<string | null>(null);
   const [loadingImageGlyphPresetId, setLoadingImageGlyphPresetId] = useState<string | null>(null);
-  const [matrixOverlayOpen, setMatrixOverlayOpen] = useState(false);
-  const [hintsOfColorOpen, setHintsOfColorOpen] = useState(false);
   const [echoOpen, setEchoOpen] = useState(false);
   const {
     font,
@@ -245,6 +302,7 @@ export const RightSidebar = ({
     frame,
     breakup,
     animation,
+    mask,
     color,
     exportOptions,
   exportScale,
@@ -266,9 +324,18 @@ export const RightSidebar = ({
     updateImage,
     updateBreakup,
   updateColor,
+  updateMask,
   removeUploadedFont,
   resetProcessing
 } = useStudioStore();
+  useEffect(
+    () => () => {
+      onToneRangePreviewChange(null);
+      onMaskPreviewEnd();
+    },
+    [onMaskPreviewEnd, onToneRangePreviewChange]
+  );
+
   const fontOptions = useMemo(
     () => [
       ...builtInFonts.map((family) => ({ value: family, label: family })),
@@ -330,6 +397,7 @@ export const RightSidebar = ({
     frame,
     breakup,
     animation,
+    mask,
     color,
     exportOptions,
     exportScale
@@ -406,6 +474,8 @@ export const RightSidebar = ({
     [onVisualEditPreviewEnd, onVisualEditPreviewPulse, onVisualEditPreviewStart]
   );
   const animationControlsDisabled = !canAnimateImage || stillImageMode !== "animate" || !animation.enabled;
+  const glyphShuffleAvailable = isVideoLoaded || !animationControlsDisabled;
+  const glyphShuffleSummary = animation.matrixOverlayEnabled ? "On" : "Off";
   const spinRotationsLabel =
     Number.isInteger(animation.spinRotationsPerLoop)
       ? String(animation.spinRotationsPerLoop)
@@ -417,121 +487,21 @@ export const RightSidebar = ({
   const spinLoopDescription = `${spinRotationsLabel} ${
     Math.abs(animation.spinRotationsPerLoop - 1) < 0.0001 ? "rotation" : "rotations"
   } over ${spinDurationLabel} sec`;
-  const animationSummary = canAnimateImage
+  const animationSummary = isVideoLoaded
+    ? "Video timeline"
+    : canAnimateImage
     ? animation.enabled
       ? {
           wave: "Wave",
           fade: "Fade",
           scale: "Scale",
-          matrix: "Matrix",
+          matrix: "Glyph Shuffle",
           breakup: "Breakup",
           spin: "360 Spin",
           ambient: "Ambient"
         }[animation.type]
       : "disabled"
     : "Load a still image";
-  const renderMatrixTransitionControls = (disabled: boolean) => (
-    <>
-      <Toggle
-        disabled={disabled}
-        label="Transitional color"
-        checked={animation.matrixTransitionColorEnabled}
-        onChange={(matrixTransitionColorEnabled) => updateAnimation({ matrixTransitionColorEnabled })}
-      />
-      <div
-        className={`space-y-4 transition-opacity duration-150 ${
-          animation.matrixTransitionColorEnabled && !disabled ? "opacity-100" : "opacity-45"
-        }`}
-      >
-        <ColorInput
-          disabled={disabled || !animation.matrixTransitionColorEnabled}
-          label="Transition color"
-          value={animation.matrixTransitionColor}
-          onChange={(matrixTransitionColor) => updateAnimation({ matrixTransitionColor })}
-        />
-        <Slider
-          disabled={disabled || !animation.matrixTransitionColorEnabled}
-          label="Transition amount"
-          value={animation.matrixTransitionAmount}
-          min={0}
-          max={100}
-          step={1}
-          unit="%"
-          resetValue={defaultAnimationSettings.matrixTransitionAmount}
-          onChange={(matrixTransitionAmount) => updateAnimation({ matrixTransitionAmount })}
-        />
-      </div>
-    </>
-  );
-  const renderAnimationHintsOfColorControls = () => (
-    <div className="rounded-xl border border-white/[0.06] bg-black/20">
-      <button
-        type="button"
-        className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left"
-        onClick={() => setHintsOfColorOpen((open) => !open)}
-      >
-        <span className="min-w-0">
-          <span className="block text-xs font-semibold text-zinc-300">Hints of Color</span>
-          <span className="mt-0.5 block text-[11px] text-zinc-500">
-            {color.hitsOfColor.animated ? "Animating" : "Off"}
-          </span>
-        </span>
-        <motion.span
-          animate={{ rotate: hintsOfColorOpen ? 180 : 0 }}
-          transition={{ duration: 0.14, ease: "easeOut" }}
-          className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-zinc-500"
-        >
-          <ChevronDown size={15} />
-        </motion.span>
-      </button>
-      {hintsOfColorOpen && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.12, ease: "easeOut" }}
-          className="space-y-4 px-3 pb-3"
-        >
-          <Toggle
-            label="Animate hints"
-            disabled={animationControlsDisabled}
-            checked={color.hitsOfColor.animated}
-            onChange={(animated) =>
-              updateColor({
-                hitsOfColor: {
-                  ...color.hitsOfColor,
-                  enabled: animated ? true : color.hitsOfColor.enabled,
-                  animated
-                }
-              })
-            }
-          />
-          <div
-            className={`space-y-4 transition-opacity duration-150 ${
-              color.hitsOfColor.animated && !animationControlsDisabled ? "opacity-100" : "opacity-45"
-            }`}
-          >
-            <ColorInput
-              label="Hint color"
-              disabled={animationControlsDisabled || !color.hitsOfColor.animated}
-              value={color.hitsOfColor.color}
-              onChange={(hintColor) => updateColor({ hitsOfColor: { ...color.hitsOfColor, color: hintColor } })}
-            />
-            <Slider
-              label="Animated hint amount"
-              disabled={animationControlsDisabled || !color.hitsOfColor.animated}
-              value={color.hitsOfColor.animatedHintAmount}
-              min={0}
-              max={100}
-              step={1}
-              unit="%"
-              resetValue={defaultColorSettings.hitsOfColor.animatedHintAmount}
-              onChange={(animatedHintAmount) => updateColor({ hitsOfColor: { ...color.hitsOfColor, animatedHintAmount } })}
-            />
-          </div>
-        </motion.div>
-      )}
-    </div>
-  );
   const selectedFrameLabel =
     frame.aspectRatio === "custom"
       ? `Custom ${frame.customCanvasWidth} x ${frame.customCanvasHeight}`
@@ -549,6 +519,25 @@ export const RightSidebar = ({
       : frame.aspectRatio.startsWith("landscape") || frame.aspectRatio === "a3-landscape"
         ? "Horizontal"
         : "";
+  const maskSummary = mask.enabled && mask.mix > 0 ? `${Math.round(mask.mix)}% cloud reveal` : "Off";
+  const updateMaskWithPreview = (patch: Parameters<typeof updateMask>[0]) => {
+    onMaskPreviewPulse();
+    updateMask(patch);
+  };
+  const randomizeMaskSeed = () => updateMaskWithPreview({ seed: Math.floor(Math.random() * 2_147_483_647) });
+  const hintsOfColorSummary = !color.hitsOfColor.enabled
+    ? "Off"
+    : color.hitsOfColor.animated
+      ? `${Math.round(color.hitsOfColor.animatedHintAmount)}% animated`
+      : `${Math.round(color.hitsOfColor.amount)}% static`;
+  const hintsAmountValue = color.hitsOfColor.animated
+    ? color.hitsOfColor.animatedHintAmount
+    : color.hitsOfColor.amount;
+  const hintsAmountResetValue = color.hitsOfColor.animated
+    ? defaultColorSettings.hitsOfColor.animatedHintAmount
+    : defaultColorSettings.hitsOfColor.amount;
+  const updateHintsOfColor = (patch: Partial<typeof color.hitsOfColor>) =>
+    updateColor({ hitsOfColor: { ...color.hitsOfColor, ...patch } });
   const colorModeLabel =
     color.paletteMode === "single"
       ? "Duotone"
@@ -992,7 +981,7 @@ export const RightSidebar = ({
           <Slider label="Rotation" value={frame.imageRotation} min={-180} max={180} step={1} unit=" deg" resetValue={defaultFrameSettings.imageRotation} onChange={(imageRotation) => updateFrame({ imageRotation })} />
         </Section>
 
-        <Section title="Animate" icon={<Play size={16} />} order={9} summary={animationSummary} simple>
+        <Section title="Animate" icon={<Play size={16} />} order={12} summary={animationSummary} simple>
           <Toggle
             label="Enable animation"
             checked={canAnimateImage && stillImageMode === "animate" && animation.enabled}
@@ -1006,6 +995,11 @@ export const RightSidebar = ({
               }
             }}
           />
+          {isVideoLoaded && (
+            <p className="rounded-xl border border-white/[0.06] bg-black/20 px-3 py-2 text-[11px] leading-5 text-zinc-500">
+              Video uses its own timeline. Glyph Shuffle and Hints of Color still work from their panels.
+            </p>
+          )}
           <div
             className={`space-y-4 transition-opacity duration-150 ${
               animationControlsDisabled ? "opacity-45" : "opacity-100"
@@ -1016,15 +1010,7 @@ export const RightSidebar = ({
               disabled={animationControlsDisabled}
               label="Animation type"
               value={animation.type}
-              options={[
-                { value: "wave", label: "Wave" },
-                { value: "fade", label: "Fade in/out" },
-                { value: "scale", label: "Scale in" },
-                { value: "matrix", label: "Matrix character change" },
-                { value: "breakup", label: "Breakup" },
-                { value: "spin", label: "360 Spin" },
-                { value: "ambient", label: "Ambient" }
-              ]}
+              options={animationTypeOptions}
               onChange={(type) => updateAnimation({ type: type as typeof animation.type })}
             />
             {animation.type === "wave" && (
@@ -1035,11 +1021,7 @@ export const RightSidebar = ({
                   disabled={animationControlsDisabled}
                   label="Direction"
                   value={animation.direction}
-                  options={[
-                    { value: "horizontal", label: "Horizontal" },
-                    { value: "vertical", label: "Vertical" },
-                    { value: "both", label: "Both" }
-                  ]}
+                  options={waveDirectionOptions}
                   onChange={(direction) => updateAnimation({ direction: direction as typeof animation.direction })}
                 />
                 <Slider
@@ -1143,10 +1125,7 @@ export const RightSidebar = ({
                   disabled={animationControlsDisabled}
                   label="Rotation direction"
                   value={animation.spinDirection}
-                  options={[
-                    { value: "clockwise", label: "Clockwise" },
-                    { value: "counterclockwise", label: "Counterclockwise" }
-                  ]}
+                  options={spinDirectionOptions}
                   onChange={(spinDirection) => updateAnimation({ spinDirection: spinDirection as typeof animation.spinDirection })}
                 />
               </>
@@ -1157,13 +1136,7 @@ export const RightSidebar = ({
                   disabled={animationControlsDisabled}
                   label="Direction"
                   value={animation.ambientDirection}
-                  options={[
-                    { value: "vertical", label: "Vertical" },
-                    { value: "horizontal", label: "Horizontal" },
-                    { value: "diagonal", label: "Diagonal" },
-                    { value: "circular", label: "Circular" },
-                    { value: "angle", label: "Custom Angle" }
-                  ]}
+                  options={ambientDirectionOptions}
                   onChange={(ambientDirection) =>
                     updateAnimation({ ambientDirection: ambientDirection as typeof animation.ambientDirection })
                   }
@@ -1194,17 +1167,6 @@ export const RightSidebar = ({
                 />
                 <Slider
                   disabled={animationControlsDisabled}
-                  label="Speed"
-                  value={animation.velocity}
-                  min={0}
-                  max={400}
-                  step={1}
-                  unit="%"
-                  resetValue={defaultAnimationSettings.velocity}
-                  onChange={(velocity) => updateAnimation({ velocity })}
-                />
-                <Slider
-                  disabled={animationControlsDisabled}
                   label="Smoothness"
                   value={animation.strength}
                   min={0}
@@ -1214,100 +1176,20 @@ export const RightSidebar = ({
                   resetValue={defaultAnimationSettings.strength}
                   onChange={(strength) => updateAnimation({ strength })}
                 />
+                <Slider
+                  disabled={animationControlsDisabled}
+                  label="Effect loops"
+                  value={animation.effectLoopsPerLoop}
+                  min={0.1}
+                  max={10}
+                  step={0.1}
+                  resetValue={defaultAnimationSettings.effectLoopsPerLoop}
+                  onChange={(effectLoopsPerLoop) => updateAnimation({ effectLoopsPerLoop })}
+                />
               </>
             )}
             <Slider disabled={animationControlsDisabled} label="Loop Duration" value={animation.loopDuration} min={1} max={12} step={0.5} unit=" sec" resetValue={defaultAnimationSettings.loopDuration} onChange={(loopDuration) => updateAnimation({ loopDuration })} />
             <Slider disabled={animationControlsDisabled} label="Animation FPS" value={animation.fps} min={1} max={60} step={1} unit=" fps" resetValue={defaultAnimationSettings.fps} onChange={(fps) => updateAnimation({ fps })} />
-            {animation.type !== "matrix" && (
-              <div className="rounded-xl border border-white/[0.06] bg-black/20">
-                <button
-                  type="button"
-                  className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left"
-                  onClick={() => setMatrixOverlayOpen((open) => !open)}
-                >
-                  <span className="min-w-0">
-                    <span className="block text-xs font-semibold text-zinc-300">Matrix Overlay</span>
-                    <span className="mt-0.5 block text-[11px] text-zinc-500">
-                      {animation.matrixOverlayEnabled ? "On" : "Off"}
-                    </span>
-                  </span>
-                  <motion.span
-                    animate={{ rotate: matrixOverlayOpen ? 180 : 0 }}
-                    transition={{ duration: 0.14, ease: "easeOut" }}
-                    className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-zinc-500"
-                  >
-                    <ChevronDown size={15} />
-                  </motion.span>
-                </button>
-                {matrixOverlayOpen && (
-                  <motion.div
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    transition={{ duration: 0.12, ease: "easeOut" }}
-                    className="space-y-4 px-3 pb-3"
-                  >
-                    <Toggle
-                      label="Enable Matrix Overlay"
-                      checked={animation.matrixOverlayEnabled}
-                      disabled={animationControlsDisabled}
-                      onChange={(matrixOverlayEnabled) => updateAnimation({ matrixOverlayEnabled })}
-                    />
-                    <div
-                      className={`space-y-4 transition-opacity duration-150 ${
-                        animation.matrixOverlayEnabled && !animationControlsDisabled ? "opacity-100" : "opacity-45"
-                      }`}
-                    >
-                      <Slider
-                        disabled={animationControlsDisabled || !animation.matrixOverlayEnabled}
-                        label="Matrix Intensity"
-                        value={animation.matrixOverlayIntensity}
-                        min={0}
-                        max={100}
-                        step={1}
-                        unit="%"
-                        resetValue={defaultAnimationSettings.matrixOverlayIntensity}
-                        onChange={(matrixOverlayIntensity) => updateAnimation({ matrixOverlayIntensity })}
-                      />
-                      <Slider
-                        disabled={animationControlsDisabled || !animation.matrixOverlayEnabled}
-                        label="Matrix Speed"
-                        value={animation.matrixOverlaySpeed}
-                        min={0}
-                        max={400}
-                        step={1}
-                        unit="%"
-                        resetValue={defaultAnimationSettings.matrixOverlaySpeed}
-                        onChange={(matrixOverlaySpeed) => updateAnimation({ matrixOverlaySpeed })}
-                      />
-                      <Slider
-                        disabled={animationControlsDisabled || !animation.matrixOverlayEnabled}
-                        label="Matrix Change Rate"
-                        value={animation.matrixOverlayChangeRate}
-                        min={0}
-                        max={100}
-                        step={1}
-                        unit="%"
-                        resetValue={defaultAnimationSettings.matrixOverlayChangeRate}
-                        onChange={(matrixOverlayChangeRate) => updateAnimation({ matrixOverlayChangeRate })}
-                      />
-                      <Slider
-                        disabled={animationControlsDisabled || !animation.matrixOverlayEnabled}
-                        label="Matrix Randomness"
-                        value={animation.matrixOverlayRandomness}
-                        min={0}
-                        max={100}
-                        step={1}
-                        unit="%"
-                        resetValue={defaultAnimationSettings.matrixOverlayRandomness}
-                        onChange={(matrixOverlayRandomness) => updateAnimation({ matrixOverlayRandomness })}
-                      />
-                      {renderMatrixTransitionControls(animationControlsDisabled || !animation.matrixOverlayEnabled)}
-                    </div>
-                  </motion.div>
-                )}
-              </div>
-            )}
-            {renderAnimationHintsOfColorControls()}
             <div className="rounded-xl border border-white/[0.06] bg-black/20">
               <button
                 type="button"
@@ -1400,7 +1282,7 @@ export const RightSidebar = ({
           <div className="flex items-center justify-between rounded-xl border border-white/[0.06] bg-black/20 px-3 py-2">
             <span className="text-xs text-zinc-500">Tonal map</span>
             <IconButton
-              title="Invert tonal map for glyph selection"
+              title="Invert source colors before tonal and glyph sampling"
               active={image.invertTone}
               onClick={() => updateImage({ invertTone: !image.invertTone })}
             >
@@ -1416,6 +1298,26 @@ export const RightSidebar = ({
             onChange={(exposure) => updateImage({ exposure, brightness: defaultImageSettings.brightness })}
           />
           <Slider label="Contrast" value={image.contrast} min={0.35} max={2.4} resetValue={defaultImageSettings.contrast} onChange={(contrast) => updateImage({ contrast })} />
+          <Slider
+            label="Saturation"
+            value={image.saturation}
+            min={-100}
+            max={100}
+            step={1}
+            unit="%"
+            resetValue={defaultImageSettings.saturation}
+            onChange={(saturation) => updateImage({ saturation })}
+          />
+          <Slider
+            label="Hue"
+            value={image.hue}
+            min={-180}
+            max={180}
+            step={1}
+            unit=" deg"
+            resetValue={defaultImageSettings.hue}
+            onChange={(hue) => updateImage({ hue })}
+          />
           <TonalRangeGroup title="Shadows" icon={<Moon size={15} />}>
             <Slider
               label="Strength"
@@ -1425,8 +1327,6 @@ export const RightSidebar = ({
               step={1}
               unit="%"
               resetValue={defaultImageSettings.shadows}
-              onInteractionStart={() => onToneRangePreviewChange("shadows")}
-              onInteractionEnd={() => onToneRangePreviewChange(null)}
               onChange={(shadows) => updateImage({ shadows })}
             />
             <Slider
@@ -1451,8 +1351,6 @@ export const RightSidebar = ({
               step={1}
               unit="%"
               resetValue={defaultImageSettings.midtones}
-              onInteractionStart={() => onToneRangePreviewChange("midtones")}
-              onInteractionEnd={() => onToneRangePreviewChange(null)}
               onChange={(midtones) => updateImage({ midtones })}
             />
             <Slider
@@ -1477,8 +1375,6 @@ export const RightSidebar = ({
               step={1}
               unit="%"
               resetValue={defaultImageSettings.highlights}
-              onInteractionStart={() => onToneRangePreviewChange("highlights")}
-              onInteractionEnd={() => onToneRangePreviewChange(null)}
               onChange={(highlights) => updateImage({ highlights })}
             />
             <Slider
@@ -1495,14 +1391,14 @@ export const RightSidebar = ({
             />
           </TonalRangeGroup>
           <Slider
-            label="Blur"
-            value={blurControlValue(image)}
-            min={0}
+            label="Blur / Sharpness"
+            value={blurSharpnessControlValue(image)}
+            min={-100}
             max={100}
             step={1}
             unit="%"
-            resetValue={defaultBlurControlValue}
-            onChange={(blur) => updateImage({ blur: blurRadiusFromControl(blur), sharpen: 0 })}
+            resetValue={defaultBlurSharpnessControlValue}
+            onChange={(value) => updateImage(blurSharpnessPatchFromControl(value))}
           />
         </Section>
 
@@ -1835,10 +1731,194 @@ export const RightSidebar = ({
           />
         </Section>
 
+        <Section title="Mask" icon={<Cloud size={16} />} order={7} summary={maskSummary}>
+          <div className="space-y-4">
+            <p className="rounded-xl border border-white/[0.06] bg-black/20 px-3 py-2 text-xs leading-5 text-zinc-400">
+              Use a soft cloud mask to reveal the original image through the ASCII render.
+            </p>
+            <Toggle
+              label="Enable Mask"
+              checked={mask.enabled}
+              onChange={(enabled) => updateMaskWithPreview({ enabled })}
+            />
+            <div className={`space-y-4 ${mask.enabled ? "opacity-100" : "opacity-45"}`}>
+              <Slider
+                disabled={!mask.enabled}
+                label="Mix"
+                value={mask.mix}
+                min={0}
+                max={100}
+                step={1}
+                unit="%"
+                resetValue={defaultMaskSettings.mix}
+                onInteractionStart={onMaskPreviewStart}
+                onInteractionEnd={onMaskPreviewEnd}
+                onChange={(mix) => updateMaskWithPreview({ mix })}
+              />
+              <Slider
+                disabled={!mask.enabled}
+                label="Cloud Size"
+                value={mask.cloudSize}
+                min={1}
+                max={100}
+                step={1}
+                resetValue={defaultMaskSettings.cloudSize}
+                onInteractionStart={onMaskPreviewStart}
+                onInteractionEnd={onMaskPreviewEnd}
+                onChange={(cloudSize) => updateMaskWithPreview({ cloudSize })}
+              />
+              <Slider
+                disabled={!mask.enabled}
+                label="Softness"
+                value={mask.softness}
+                min={0}
+                max={100}
+                step={1}
+                unit="%"
+                resetValue={defaultMaskSettings.softness}
+                onInteractionStart={onMaskPreviewStart}
+                onInteractionEnd={onMaskPreviewEnd}
+                onChange={(softness) => updateMaskWithPreview({ softness })}
+              />
+              <Toggle
+                disabled={!mask.enabled}
+                label="Invert"
+                checked={mask.invert}
+                onChange={(invert) => updateMaskWithPreview({ invert })}
+              />
+              <CommandButton
+                variant="secondary"
+                disabled={!mask.enabled}
+                onClick={randomizeMaskSeed}
+              >
+                <Shuffle size={16} />
+                New Pattern
+              </CommandButton>
+            </div>
+          </div>
+        </Section>
+
+        <Section title="Glyph Shuffle" icon={<Shuffle size={16} />} order={8} summary={glyphShuffleSummary}>
+          <div className="space-y-4">
+            <Toggle
+              label="Enable Glyph Shuffle"
+              checked={animation.matrixOverlayEnabled}
+              disabled={!glyphShuffleAvailable}
+              onChange={(matrixOverlayEnabled) => updateAnimation({ matrixOverlayEnabled })}
+            />
+            {isVideoLoaded && (
+              <p className="text-[11px] leading-5 text-zinc-500">
+                Uses the current video time while playing, paused, or scrubbing.
+              </p>
+            )}
+            <div
+              className={`space-y-4 transition-opacity duration-150 ${
+                animation.matrixOverlayEnabled && glyphShuffleAvailable ? "opacity-100" : "opacity-45"
+              }`}
+            >
+              <Slider
+                disabled={!glyphShuffleAvailable || !animation.matrixOverlayEnabled}
+                label="Shuffle Intensity"
+                value={animation.matrixOverlayIntensity}
+                min={0}
+                max={100}
+                step={1}
+                unit="%"
+                resetValue={defaultAnimationSettings.matrixOverlayIntensity}
+                onChange={(matrixOverlayIntensity) => updateAnimation({ matrixOverlayIntensity })}
+              />
+              <Slider
+                disabled={!glyphShuffleAvailable || !animation.matrixOverlayEnabled}
+                label="Shuffle Speed"
+                value={animation.matrixOverlaySpeed}
+                min={0}
+                max={400}
+                step={1}
+                unit="%"
+                resetValue={defaultAnimationSettings.matrixOverlaySpeed}
+                onChange={(matrixOverlaySpeed) => updateAnimation({ matrixOverlaySpeed })}
+              />
+              <Slider
+                disabled={!glyphShuffleAvailable || !animation.matrixOverlayEnabled}
+                label="Change Rate"
+                value={animation.matrixOverlayChangeRate}
+                min={0}
+                max={100}
+                step={1}
+                unit="%"
+                resetValue={defaultAnimationSettings.matrixOverlayChangeRate}
+                onChange={(matrixOverlayChangeRate) => updateAnimation({ matrixOverlayChangeRate })}
+              />
+              <Slider
+                disabled={!glyphShuffleAvailable || !animation.matrixOverlayEnabled}
+                label="Randomness"
+                value={animation.matrixOverlayRandomness}
+                min={0}
+                max={100}
+                step={1}
+                unit="%"
+                resetValue={defaultAnimationSettings.matrixOverlayRandomness}
+                onChange={(matrixOverlayRandomness) => updateAnimation({ matrixOverlayRandomness })}
+              />
+            </div>
+          </div>
+        </Section>
+
+        <Section title="Hints of Color" icon={<Sparkles size={16} />} order={9} summary={hintsOfColorSummary}>
+          <div className="space-y-4">
+            <Toggle
+              label="Enable Hints"
+              checked={color.hitsOfColor.enabled}
+              onChange={(enabled) =>
+                updateHintsOfColor({
+                  enabled,
+                  animated: enabled ? color.hitsOfColor.animated : false
+                })
+              }
+            />
+            {isVideoLoaded && (
+              <p className="text-[11px] leading-5 text-zinc-500">
+                Static hints stay fixed; animated hints follow the current video time.
+              </p>
+            )}
+            <div className={`space-y-4 transition-opacity duration-150 ${color.hitsOfColor.enabled ? "opacity-100" : "opacity-45"}`}>
+              <ColorInput
+                label="Hint Color"
+                disabled={!color.hitsOfColor.enabled}
+                value={color.hitsOfColor.color}
+                onChange={(hintColor) => updateHintsOfColor({ color: hintColor })}
+              />
+              <Slider
+                label="Amount"
+                disabled={!color.hitsOfColor.enabled}
+                value={hintsAmountValue}
+                min={0}
+                max={100}
+                step={1}
+                unit="%"
+                resetValue={hintsAmountResetValue}
+                onChange={(amount) =>
+                  updateHintsOfColor(
+                    color.hitsOfColor.animated
+                      ? { animatedHintAmount: amount }
+                      : { amount }
+                  )
+                }
+              />
+              <Toggle
+                label="Animate Hints"
+                disabled={!color.hitsOfColor.enabled}
+                checked={color.hitsOfColor.animated}
+                onChange={(animated) => updateHintsOfColor({ animated })}
+              />
+            </div>
+          </div>
+        </Section>
+
         <Section
           title="Particles"
           icon={<Sparkles size={16} />}
-          order={7}
+          order={10}
           summary={breakup.amount > 0 ? `${Math.round(breakup.amount)}%` : "Off"}
         >
           <Slider label="Breakup Strength" value={breakup.amount} min={0} max={100} step={1} unit="%" resetValue={defaultBreakupSettings.amount} onChange={(amount) => updateBreakup({ amount })} />
@@ -1852,15 +1932,7 @@ export const RightSidebar = ({
           <Select
             label="Direction Bias"
             value={breakup.directionBias}
-            options={[
-              { value: "none", label: "None" },
-              { value: "up", label: "Up" },
-              { value: "down", label: "Down" },
-              { value: "left", label: "Left" },
-              { value: "right", label: "Right" },
-              { value: "radial", label: "Radial" },
-              { value: "random", label: "Random" }
-            ]}
+            options={particleDirectionOptions}
             onChange={(directionBias) => updateBreakup({ directionBias: directionBias as typeof breakup.directionBias })}
           />
           <label className="block">
@@ -1884,7 +1956,7 @@ export const RightSidebar = ({
           </label>
         </Section>
 
-        <Section title="Color" icon={<Palette size={16} />} order={8} summary={colorModeLabel}>
+        <Section title="Color" icon={<Palette size={16} />} order={11} summary={colorModeLabel}>
           <Select
             label="Mode"
             value={color.paletteMode}
@@ -1909,43 +1981,6 @@ export const RightSidebar = ({
                 value={color.backgroundColor}
                 onChange={(backgroundColor) => updateColor({ backgroundColor })}
               />
-              <Slider
-                label="Duotone Threshold"
-                value={color.duotoneThreshold * 100}
-                min={0}
-                max={100}
-                step={1}
-                unit="%"
-                resetValue={defaultColorSettings.duotoneThreshold * 100}
-                onChange={(duotoneThreshold) => updateColor({ duotoneThreshold: duotoneThreshold / 100 })}
-              />
-              <div className="space-y-3 rounded-xl border border-white/[0.06] bg-black/20 p-3">
-                <span className="block text-xs font-semibold text-zinc-300">Hints of Color</span>
-                <Toggle
-                  label="Enable Hints of Color"
-                  checked={color.hitsOfColor.enabled}
-                  onChange={(enabled) => updateColor({ hitsOfColor: { ...color.hitsOfColor, enabled } })}
-                />
-                <div className={`space-y-3 ${color.hitsOfColor.enabled ? "opacity-100" : "opacity-45"}`}>
-                  <ColorInput
-                    label="Hint color"
-                    disabled={!color.hitsOfColor.enabled}
-                    value={color.hitsOfColor.color}
-                    onChange={(hintColor) => updateColor({ hitsOfColor: { ...color.hitsOfColor, color: hintColor } })}
-                  />
-                  <Slider
-                    label="Hint amount"
-                    disabled={!color.hitsOfColor.enabled}
-                    value={color.hitsOfColor.amount}
-                    min={0}
-                    max={100}
-                    step={1}
-                    unit="%"
-                    resetValue={defaultColorSettings.hitsOfColor.amount}
-                    onChange={(amount) => updateColor({ hitsOfColor: { ...color.hitsOfColor, amount } })}
-                  />
-                </div>
-              </div>
             </div>
           )}
           {color.paletteMode === "custom" && (
@@ -2154,6 +2189,7 @@ export const RightSidebar = ({
               }
               try {
                 const preset = parseSettingsPresetFile(await file.text());
+                onToneRangePreviewChange(null);
                 importSettingsPreset(preset.name, preset.settings);
                 setSettingsPresetName("");
                 setSettingsPresetError(null);
@@ -2172,6 +2208,7 @@ export const RightSidebar = ({
                   if (!id) {
                     return;
                   }
+                  onToneRangePreviewChange(null);
                   loadSettingsPreset(id);
                   setSettingsPresetName("");
                   setSettingsPresetError(null);
@@ -2243,6 +2280,7 @@ export const RightSidebar = ({
                 if (!selectedSettingsPreset) {
                   return;
                 }
+                onToneRangePreviewChange(null);
                 loadSettingsPreset(selectedSettingsPreset.id);
                 setSettingsPresetName("");
                 setSettingsPresetError(null);
@@ -2255,6 +2293,7 @@ export const RightSidebar = ({
               variant="secondary"
               title="Reset settings to defaults without clearing uploaded media"
               onClick={() => {
+                onToneRangePreviewChange(null);
                 resetProcessing();
                 setSettingsPresetName("");
                 setSettingsPresetError(null);

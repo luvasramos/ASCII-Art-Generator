@@ -73,10 +73,18 @@ export const hintsOfColorCanRender = (color: ColorSettings, animation?: Animatio
   return color.hitsOfColor.amount > 0;
 };
 
+export const matrixTransitionColorCanRenderForColor = (
+  animation: AnimationSettings | undefined | null,
+  color: ColorSettings
+) =>
+  !isStrictDuotoneColorMode(color) &&
+  matrixTransitionColorCanRender(animation) &&
+  !hintsOfColorCanRender(color, animation);
+
 export const hasDuotoneColorExceptions = (
   color: ColorSettings,
   animation?: AnimationSettings | null
-) => hintsOfColorCanRender(color, animation) || matrixTransitionColorCanRender(animation);
+) => hintsOfColorCanRender(color, animation);
 
 export const isStrictDuotoneWithoutColorExceptions = (
   color: ColorSettings,
