@@ -295,6 +295,7 @@ export const RightSidebar = ({
   const [settingsPresetError, setSettingsPresetError] = useState<string | null>(null);
   const [loadingImageGlyphPresetId, setLoadingImageGlyphPresetId] = useState<string | null>(null);
   const [echoOpen, setEchoOpen] = useState(false);
+  const [glyphShuffleOpen, setGlyphShuffleOpen] = useState(false);
   const {
     font,
     ascii,
@@ -475,7 +476,8 @@ export const RightSidebar = ({
   );
   const animationControlsDisabled = !canAnimateImage || stillImageMode !== "animate" || !animation.enabled;
   const glyphShuffleAvailable = isVideoLoaded || !animationControlsDisabled;
-  const glyphShuffleSummary = animation.matrixOverlayEnabled ? "On" : "Off";
+  const showOptionalGlyphShuffle = animation.type !== "matrix" || isVideoLoaded;
+  const glyphShuffleControlsDisabled = !glyphShuffleAvailable || !animation.matrixOverlayEnabled;
   const spinRotationsLabel =
     Number.isInteger(animation.spinRotationsPerLoop)
       ? String(animation.spinRotationsPerLoop)
@@ -997,7 +999,7 @@ export const RightSidebar = ({
           />
           {isVideoLoaded && (
             <p className="rounded-xl border border-white/[0.06] bg-black/20 px-3 py-2 text-[11px] leading-5 text-zinc-500">
-              Video uses its own timeline. Glyph Shuffle and Hints of Color still work from their panels.
+              Video uses its own timeline. Glyph Shuffle is available below, and Hints of Color still works from its panel.
             </p>
           )}
           <div
@@ -1091,8 +1093,8 @@ export const RightSidebar = ({
             )}
             {animation.type === "matrix" && (
               <>
-                <Slider disabled={animationControlsDisabled} label="Change speed" value={animation.velocity} min={0} max={400} step={1} unit="%" resetValue={defaultAnimationSettings.velocity} onChange={(velocity) => updateAnimation({ velocity })} />
-                <Slider disabled={animationControlsDisabled} label="Change amount" value={animation.strength} min={0} max={100} step={1} unit="%" resetValue={defaultAnimationSettings.strength} onChange={(strength) => updateAnimation({ strength })} />
+                <Slider disabled={animationControlsDisabled} label="Change Speed" value={animation.velocity} min={0} max={400} step={1} unit="%" resetValue={defaultAnimationSettings.velocity} onChange={(velocity) => updateAnimation({ velocity })} />
+                <Slider disabled={animationControlsDisabled} label="Change Amount" value={animation.strength} min={0} max={100} step={1} unit="%" resetValue={defaultAnimationSettings.strength} onChange={(strength) => updateAnimation({ strength })} />
                 <Slider
                   disabled={animationControlsDisabled}
                   label="Effect loops"
@@ -1276,6 +1278,99 @@ export const RightSidebar = ({
               )}
             </div>
           </div>
+          {showOptionalGlyphShuffle && (
+            <div className="rounded-xl border border-white/[0.06] bg-black/20">
+              <button
+                type="button"
+                className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left"
+                onClick={() => setGlyphShuffleOpen((open) => !open)}
+              >
+                <span className="min-w-0">
+                  <span className="block text-xs font-semibold text-zinc-300">Glyph Shuffle</span>
+                  <span className="mt-0.5 block text-[11px] text-zinc-500">
+                    {animation.matrixOverlayEnabled ? "On" : "Off"}
+                  </span>
+                </span>
+                <motion.span
+                  animate={{ rotate: glyphShuffleOpen ? 180 : 0 }}
+                  transition={{ duration: 0.14, ease: "easeOut" }}
+                  className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-zinc-500"
+                >
+                  <ChevronDown size={15} />
+                </motion.span>
+              </button>
+              {glyphShuffleOpen && (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ duration: 0.12, ease: "easeOut" }}
+                  className="space-y-4 px-3 pb-3"
+                >
+                  <Toggle
+                    label="Enable Glyph Shuffle"
+                    checked={animation.matrixOverlayEnabled}
+                    disabled={!glyphShuffleAvailable}
+                    onChange={(matrixOverlayEnabled) => updateAnimation({ matrixOverlayEnabled })}
+                  />
+                  {isVideoLoaded && (
+                    <p className="text-[11px] leading-5 text-zinc-500">
+                      Uses the current video time while playing, paused, or scrubbing.
+                    </p>
+                  )}
+                  <div
+                    className={`space-y-4 transition-opacity duration-150 ${
+                      glyphShuffleControlsDisabled ? "opacity-45" : "opacity-100"
+                    }`}
+                  >
+                    <Slider
+                      disabled={glyphShuffleControlsDisabled}
+                      label="Shuffle Intensity"
+                      value={animation.matrixOverlayIntensity}
+                      min={0}
+                      max={100}
+                      step={1}
+                      unit="%"
+                      resetValue={defaultAnimationSettings.matrixOverlayIntensity}
+                      onChange={(matrixOverlayIntensity) => updateAnimation({ matrixOverlayIntensity })}
+                    />
+                    <Slider
+                      disabled={glyphShuffleControlsDisabled}
+                      label="Shuffle Speed"
+                      value={animation.matrixOverlaySpeed}
+                      min={0}
+                      max={400}
+                      step={1}
+                      unit="%"
+                      resetValue={defaultAnimationSettings.matrixOverlaySpeed}
+                      onChange={(matrixOverlaySpeed) => updateAnimation({ matrixOverlaySpeed })}
+                    />
+                    <Slider
+                      disabled={glyphShuffleControlsDisabled}
+                      label="Change Rate"
+                      value={animation.matrixOverlayChangeRate}
+                      min={0}
+                      max={100}
+                      step={1}
+                      unit="%"
+                      resetValue={defaultAnimationSettings.matrixOverlayChangeRate}
+                      onChange={(matrixOverlayChangeRate) => updateAnimation({ matrixOverlayChangeRate })}
+                    />
+                    <Slider
+                      disabled={glyphShuffleControlsDisabled}
+                      label="Randomness"
+                      value={animation.matrixOverlayRandomness}
+                      min={0}
+                      max={100}
+                      step={1}
+                      unit="%"
+                      resetValue={defaultAnimationSettings.matrixOverlayRandomness}
+                      onChange={(matrixOverlayRandomness) => updateAnimation({ matrixOverlayRandomness })}
+                    />
+                  </div>
+                </motion.div>
+              )}
+            </div>
+          )}
         </Section>
 
         <Section title="Tone" icon={<ImageIcon size={16} />} order={5}>
@@ -1794,72 +1889,6 @@ export const RightSidebar = ({
                 <Shuffle size={16} />
                 New Pattern
               </CommandButton>
-            </div>
-          </div>
-        </Section>
-
-        <Section title="Glyph Shuffle" icon={<Shuffle size={16} />} order={8} summary={glyphShuffleSummary}>
-          <div className="space-y-4">
-            <Toggle
-              label="Enable Glyph Shuffle"
-              checked={animation.matrixOverlayEnabled}
-              disabled={!glyphShuffleAvailable}
-              onChange={(matrixOverlayEnabled) => updateAnimation({ matrixOverlayEnabled })}
-            />
-            {isVideoLoaded && (
-              <p className="text-[11px] leading-5 text-zinc-500">
-                Uses the current video time while playing, paused, or scrubbing.
-              </p>
-            )}
-            <div
-              className={`space-y-4 transition-opacity duration-150 ${
-                animation.matrixOverlayEnabled && glyphShuffleAvailable ? "opacity-100" : "opacity-45"
-              }`}
-            >
-              <Slider
-                disabled={!glyphShuffleAvailable || !animation.matrixOverlayEnabled}
-                label="Shuffle Intensity"
-                value={animation.matrixOverlayIntensity}
-                min={0}
-                max={100}
-                step={1}
-                unit="%"
-                resetValue={defaultAnimationSettings.matrixOverlayIntensity}
-                onChange={(matrixOverlayIntensity) => updateAnimation({ matrixOverlayIntensity })}
-              />
-              <Slider
-                disabled={!glyphShuffleAvailable || !animation.matrixOverlayEnabled}
-                label="Shuffle Speed"
-                value={animation.matrixOverlaySpeed}
-                min={0}
-                max={400}
-                step={1}
-                unit="%"
-                resetValue={defaultAnimationSettings.matrixOverlaySpeed}
-                onChange={(matrixOverlaySpeed) => updateAnimation({ matrixOverlaySpeed })}
-              />
-              <Slider
-                disabled={!glyphShuffleAvailable || !animation.matrixOverlayEnabled}
-                label="Change Rate"
-                value={animation.matrixOverlayChangeRate}
-                min={0}
-                max={100}
-                step={1}
-                unit="%"
-                resetValue={defaultAnimationSettings.matrixOverlayChangeRate}
-                onChange={(matrixOverlayChangeRate) => updateAnimation({ matrixOverlayChangeRate })}
-              />
-              <Slider
-                disabled={!glyphShuffleAvailable || !animation.matrixOverlayEnabled}
-                label="Randomness"
-                value={animation.matrixOverlayRandomness}
-                min={0}
-                max={100}
-                step={1}
-                unit="%"
-                resetValue={defaultAnimationSettings.matrixOverlayRandomness}
-                onChange={(matrixOverlayRandomness) => updateAnimation({ matrixOverlayRandomness })}
-              />
             </div>
           </div>
         </Section>

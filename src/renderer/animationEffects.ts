@@ -143,15 +143,15 @@ interface MatrixGlyphControls {
   salt: number;
 }
 
-const matrixSlotCount = ({ changeRate, changeRateMax, continuous }: MatrixGlyphControls) =>
-  Math.max(
-    continuous ? 8 : 5,
-    Math.round((continuous ? 8 : 5) + clamp01(changeRate / Math.max(1, changeRateMax)) * (continuous ? 34 : 42))
-  );
+interface GlyphDensityCandidate {
+  glyph: string;
+  density: number;
+}
 
-const matrixProgress = (progress: number, speed: number) => {
-  const cycles = Math.max(1, 1 + Math.floor(clamp01(speed / 400) * 4));
-  return (progress * cycles) % 1;
+const matrixSlotCount = ({ speed, continuous }: MatrixGlyphControls) => {
+  const speed01 = clamp01(speed / 400);
+  const maxSlots = continuous ? 72 : 64;
+  return Math.max(1, Math.round(1 + Math.pow(speed01, 2.4) * (maxSlots - 1)));
 };
 
 const matrixChancePulse = (fraction: number) => Math.sin(clamp01(fraction) * Math.PI);
@@ -170,13 +170,11 @@ const resolveMatrixCellTiming = (
 ) => {
   const cellPhase = hash(cell.x, cell.y, 73 + controls.salt);
   const cellPhaseB = hash(cell.x, cell.y, 89 + controls.salt);
-  const localProgress = controls.continuous
-    ? (matrixProgress(progress, controls.speed) + cellPhase) % 1
-    : (progress + cellPhase) % 1;
+  const localProgress = (progress + cellPhase) % 1;
   const slot = Math.min(slots - 1, Math.floor(localProgress * slots));
   const fraction = localProgress * slots - slot;
   const secondaryProgress = controls.continuous
-    ? (matrixProgress(progress, controls.speed) + cellPhaseB) % 1
+    ? (progress + cellPhaseB) % 1
     : (progress + cellPhaseB + slot / Math.max(1, slots)) % 1;
   const secondarySlot = Math.min(secondarySlots - 1, Math.floor(secondaryProgress * secondarySlots));
 
@@ -195,11 +193,15 @@ const matrixChangeChance = (
   controls: MatrixGlyphControls
 ) => {
   const pulse = matrixChancePulse(fraction);
+  const changeAmount = clamp01(controls.changeRate / Math.max(1, controls.changeRateMax));
+  const amountCoverage = changeAmount <= 0 ? 0 : Math.min(1, 0.08 + Math.pow(changeAmount, 0.55) * 0.92);
+  const intensityGate = 0.35 + clamp01(baseChance) * 0.65;
+  const activeCoverage = Math.min(0.92, amountCoverage * intensityGate);
   if (controls.continuous) {
-    return baseChance * (0.24 + pulse * 0.52 + hash(cell.x, cell.y, slot + 191 + controls.salt) * 0.16);
+    return activeCoverage * (0.58 + pulse * 0.32 + hash(cell.x, cell.y, slot + 191 + controls.salt) * 0.1);
   }
   const cellVariation = 0.82 + hash(cell.x, cell.y, slot + 191 + controls.salt) * 0.18;
-  return baseChance * (0.34 + pulse * 0.66) * cellVariation;
+  return activeCoverage * (0.62 + pulse * 0.38) * cellVariation;
 };
 
 const matrixTransitionStrength = (
@@ -252,6 +254,43 @@ const withMatrixCellPulse = (
     strength
   );
 };
+
+const uniqueCharacters = (value: string) => Array.from(new Set(Array.from(value.replace(/\s/g, ""))));
+
+const buildGlyphDensityCandidates = (
+  ascii: AsciiSettings,
+  glyphMetrics: GlyphMetric[] | undefined
+): GlyphDensityCandidate[] => {
+  const characters = uniqueCharacters(normalizeCharacterSet(ascii.charset));
+  if (characters.length < 2) {
+    return [];
+  }
+
+  const fallbackDensityStep = characters.length > 1 ? 1 / (characters.length - 1) : 0;
+  const metricByGlyph = new Map(glyphMetrics?.map((metric) => [metric.glyph, metric.density]) ?? []);
+  return characters
+    .map((glyph, index) => ({
+      glyph,
+      density: clamp01(metricByGlyph.get(glyph) ?? index * fallbackDensityStep)
+    }))
+    .sort((a, b) => a.density - b.density);
+};
+
+const nearestGlyphDensityIndex = (candidates: GlyphDensityCandidate[], density: number) => {
+  let bestIndex = 0;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < candidates.length; index += 1) {
+    const distance = Math.abs(candidates[index].density - density);
+    if (distance < bestDistance) {
+      bestIndex = index;
+      bestDistance = distance;
+    }
+  }
+  return bestIndex;
+};
+
+const buildGlyphDensityRankMap = (candidates: GlyphDensityCandidate[]) =>
+  new Map(candidates.map((candidate, index) => [candidate.glyph, index]));
 
 const applyFadeIntensity = (
   grid: RenderGrid,
@@ -322,11 +361,12 @@ const applyMatrixGlyphs = (
   ascii: AsciiSettings,
   animation: AnimationSettings,
   progress: number,
+  glyphMetrics?: GlyphMetric[],
   controls: MatrixGlyphControls = {
     intensity: animation.strength,
     speed: animation.velocity,
-    changeRate: animation.velocity,
-    changeRateMax: 400,
+    changeRate: animation.strength,
+    changeRateMax: 100,
     randomness: animation.strength,
     continuous: animation.matrixLoopStyle === "continuous",
     salt: 0
@@ -369,7 +409,7 @@ const applyMatrixGlyphs = (
       }
 
       const baseIndex = Math.round(clamp01(cell.foreground) * (glyphCount - 1));
-      const maxSpan = Math.max(1, Math.ceil((glyphCount - 1) * (0.08 + randomness * 0.62)));
+      const maxSpan = Math.max(1, Math.ceil((glyphCount - 1) * (0.035 + randomness * 0.28 + baseChance * 0.08)));
       const randomOffset = Math.round(
         (hash(cell.x + slot * 17, cell.y + secondarySlot * 31, slot + 17 + seededControls.salt) * 2 - 1) * maxSpan
       );
@@ -406,6 +446,11 @@ const applyMatrixGlyphs = (
   if (characters.length < 2) {
     return grid;
   }
+  const glyphCandidates = buildGlyphDensityCandidates(ascii, glyphMetrics);
+  if (glyphCandidates.length < 2) {
+    return grid;
+  }
+  const glyphRankByCharacter = buildGlyphDensityRankMap(glyphCandidates);
 
   const nextCells = grid.cells.map((cell): CellRenderData => {
     if (cell.alpha <= 0.01 || cell.foregroundAlpha <= 0) {
@@ -423,19 +468,24 @@ const applyMatrixGlyphs = (
     if (!cell.glyph || cell.glyph === " " || hash(cell.x, cell.y, slot + secondarySlot * 13 + seededControls.salt) > chance) {
       return cell;
     }
-    const currentIndex = characters.indexOf(cell.glyph);
-    const maxSpan = Math.max(1, Math.ceil((characters.length - 1) * (0.1 + randomness * 0.8)));
+    const currentDensity = clamp01(cell.foreground);
+    const currentIndex =
+      glyphRankByCharacter.get(cell.glyph) ?? nearestGlyphDensityIndex(glyphCandidates, currentDensity);
+    const maxSpan = Math.max(
+      1,
+      Math.ceil((glyphCandidates.length - 1) * (0.025 + randomness * 0.24 + baseChance * 0.08))
+    );
     const randomOffset = Math.round(
       (hash(cell.x + slot * 17, cell.y + secondarySlot * 31, slot + 17 + seededControls.salt) * 2 - 1) * maxSpan
     );
-    const fallbackIndex = Math.floor(
-      hash(cell.x + slot * 23, cell.y + secondarySlot * 29, slot + 331 + seededControls.salt) * characters.length
-    );
-    const index =
-      currentIndex >= 0
-        ? Math.min(characters.length - 1, Math.max(0, currentIndex + randomOffset))
-        : fallbackIndex;
-    const nextGlyph = characters[index] ?? cell.glyph;
+    const fallbackOffset =
+      randomOffset === 0
+        ? hash(cell.x + slot * 23, cell.y + secondarySlot * 29, slot + 331 + seededControls.salt) > 0.5
+          ? 1
+          : -1
+        : randomOffset;
+    const index = Math.min(glyphCandidates.length - 1, Math.max(0, currentIndex + fallbackOffset));
+    const nextGlyph = glyphCandidates[index]?.glyph ?? cell.glyph;
     if (nextGlyph === cell.glyph) {
       return cell;
     }
@@ -474,7 +524,7 @@ export const resolveRenderAnimationState = (
   const progress = getContinuousProgress(animation, timeSeconds);
   const withMatrixOverlay = (nextGrid: RenderGrid) =>
     animation.matrixOverlayEnabled
-      ? applyMatrixGlyphs(nextGrid, ascii, animation, progress, {
+      ? applyMatrixGlyphs(nextGrid, ascii, animation, progress, glyphMetrics, {
           intensity: animation.matrixOverlayIntensity,
           speed: animation.matrixOverlaySpeed,
           changeRate: animation.matrixOverlayChangeRate,
@@ -507,7 +557,7 @@ export const resolveRenderAnimationState = (
       brightnessMultiplier: 1,
       glyphAlphaMultiplier: 1,
       glyphScaleMultiplier: 1,
-      grid: applyMatrixGlyphs(grid, ascii, matrixCharacterAnimation, matrixEffectProgress)
+      grid: applyMatrixGlyphs(grid, ascii, matrixCharacterAnimation, matrixEffectProgress, glyphMetrics)
     };
   }
 
